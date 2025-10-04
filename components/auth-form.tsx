@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Spinner, LoadingSpinner } from '@/components/ui/spinner'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { Heart, Stethoscope, Shield, Users } from 'lucide-react'
+import { Heart, Stethoscope, Shield, Users, Eye, EyeOff } from 'lucide-react'
 import { useTheme } from 'next-themes'
 
 export default function AuthForm() {
@@ -17,7 +17,14 @@ export default function AuthForm() {
   const [lastName, setLastName] = useState('')
   const [cnic, setCnic] = useState('')
   const [loading, setLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [phone, setPhone] = useState('')
+  const [dateOfBirth, setDateOfBirth] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
   const { theme } = useTheme()
 
   // CNIC validation function
@@ -34,6 +41,21 @@ export default function AuthForm() {
     if (cleanValue.length <= 5) return cleanValue
     if (cleanValue.length <= 12) return `${cleanValue.slice(0, 5)}-${cleanValue.slice(5)}`
     return `${cleanValue.slice(0, 5)}-${cleanValue.slice(5, 12)}-${cleanValue.slice(12)}`
+  }
+
+  // Phone validation function
+  const validatePhone = (phone: string) => {
+    const cleanPhone = phone.replace(/\D/g, '')
+    return cleanPhone.length >= 10 && cleanPhone.length <= 15
+  }
+
+  // Format phone for display
+  const formatPhone = (value: string) => {
+    const cleanValue = value.replace(/\D/g, '')
+    if (cleanValue.length <= 4) return cleanValue
+    if (cleanValue.length <= 7) return `${cleanValue.slice(0, 4)}-${cleanValue.slice(4)}`
+    if (cleanValue.length <= 11) return `${cleanValue.slice(0, 4)}-${cleanValue.slice(4, 7)}-${cleanValue.slice(7)}`
+    return `${cleanValue.slice(0, 4)}-${cleanValue.slice(4, 7)}-${cleanValue.slice(7, 11)}`
   }
 
   const handleEmailAuth = async (e: React.FormEvent) => {
@@ -55,8 +77,17 @@ export default function AuthForm() {
         if (!validateCNIC(cnic)) {
           throw new Error('CNIC must be 13 digits (e.g., 12345-1234567-1)')
         }
+        if (!validatePhone(phone)) {
+          throw new Error('Phone number must be 10-15 digits')
+        }
+        if (!dateOfBirth) {
+          throw new Error('Date of birth is required')
+        }
         if (password.length < 6) {
           throw new Error('Password must be at least 6 characters')
+        }
+        if (password !== confirmPassword) {
+          throw new Error('Passwords do not match')
         }
 
         await authUtils.signUp({
@@ -64,8 +95,14 @@ export default function AuthForm() {
           password,
           firstName: firstName.trim(),
           lastName: lastName.trim(),
-          cnic
+          cnic,
+          phone: phone.replace(/\D/g, ''),
+          dateOfBirth
         })
+        
+        // Show success message
+        setSuccess('Account created successfully! Please check your email to confirm your account.')
+        setError('')
       }
     } catch (error: any) {
       setError(error.message)
@@ -75,14 +112,14 @@ export default function AuthForm() {
   }
 
   const handleGoogleAuth = async () => {
-    setLoading(true)
+    setGoogleLoading(true)
     setError('')
 
     try {
       await authUtils.signInWithGoogle()
     } catch (error: any) {
       setError(error.message)
-      setLoading(false)
+      setGoogleLoading(false)
     }
   }
 
@@ -153,7 +190,7 @@ export default function AuthForm() {
           <ThemeToggle />
         </div>
         
-        <div className="w-full max-w-md animate-fade-in">
+        <div className="w-full max-w-xl animate-fade-in">
           <div className="text-center mb-8">
             <div className="flex items-center justify-center mb-4">
               <div className="bg-primary-100 dark:bg-primary-900 rounded-full p-3 animate-float">
@@ -172,6 +209,12 @@ export default function AuthForm() {
             {error && (
               <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-600 dark:text-red-400 text-sm animate-slide-down">
                 {error}
+              </div>
+            )}
+            
+            {success && (
+              <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg text-green-600 dark:text-green-400 text-sm animate-slide-down">
+                {success}
               </div>
             )}
 
@@ -239,22 +282,66 @@ export default function AuthForm() {
                       Enter your 13-digit CNIC number
                     </p>
                   </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-slide-up" style={{ animationDelay: '0.6s' }}>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Phone Number
+                      </label>
+                      <Input
+                        type="tel"
+                        value={phone}
+                        onChange={(e) => setPhone(formatPhone(e.target.value))}
+                        placeholder="0300-1234567"
+                        required={!isLogin}
+                        className="input-field dark:bg-gray-800 dark:border-gray-600 dark:text-white"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Enter your phone number
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Date of Birth
+                      </label>
+                      <Input
+                        type="date"
+                        value={dateOfBirth}
+                        onChange={(e) => setDateOfBirth(e.target.value)}
+                        required={!isLogin}
+                        className="input-field dark:bg-gray-800 dark:border-gray-600 dark:text-white"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Select your date of birth
+                      </p>
+                    </div>
+                  </div>
                 </>
               )}
 
-              <div className="animate-slide-up" style={{ animationDelay: isLogin ? '0.4s' : '0.6s' }}>
+              <div className="animate-slide-up" style={{ animationDelay: isLogin ? '0.4s' : '0.8s' }}>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Password
                 </label>
-                <Input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password"
-                  required
-                  minLength={6}
-                  className="input-field dark:bg-gray-800 dark:border-gray-600 dark:text-white"
-                />
+                <div className="relative">
+                  <Input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    required
+                    minLength={6}
+                    className="input-field dark:bg-gray-800 dark:border-gray-600 dark:text-white pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
                 {!isLogin && (
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     Password must be at least 6 characters
@@ -262,10 +349,39 @@ export default function AuthForm() {
                 )}
               </div>
 
+              {!isLogin && (
+                <div className="animate-slide-up" style={{ animationDelay: '0.9s' }}>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Confirm Password
+                  </label>
+                  <div className="relative">
+                    <Input
+                      type={showConfirmPassword ? "text" : "password"}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Confirm your password"
+                      required={!isLogin}
+                      minLength={6}
+                      className="input-field dark:bg-gray-800 dark:border-gray-600 dark:text-white pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    >
+                      {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Re-enter your password to confirm
+                  </p>
+                </div>
+              )}
+
               <Button
                 type="submit"
                 className="btn-auth-primary animate-slide-up"
-                style={{ animationDelay: isLogin ? '0.5s' : '0.7s' }}
+                style={{ animationDelay: isLogin ? '0.5s' : '1.0s' }}
                 disabled={loading}
               >
                 {loading ? (
@@ -296,11 +412,11 @@ export default function AuthForm() {
 
               <Button
                 onClick={handleGoogleAuth}
-                disabled={loading}
+                disabled={googleLoading}
                 className="btn-auth-secondary animate-slide-up mt-4"
-                style={{ animationDelay: isLogin ? '0.6s' : '0.8s' }}
+                style={{ animationDelay: isLogin ? '0.6s' : '1.1s' }}
               >
-                {loading ? (
+                {googleLoading ? (
                   <div className="flex items-center justify-center">
                     <div className="relative">
                       <Spinner size="sm" className="mr-2" />
@@ -334,7 +450,7 @@ export default function AuthForm() {
               </Button>
             </div>
 
-            <div className="mt-6 text-center animate-slide-up" style={{ animationDelay: isLogin ? '0.7s' : '0.9s' }}>
+            <div className="mt-6 text-center animate-slide-up" style={{ animationDelay: isLogin ? '0.7s' : '1.2s' }}>
               <button
                 onClick={() => setIsLogin(!isLogin)}
                 className="text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 font-medium transition-colors duration-200"
@@ -344,7 +460,7 @@ export default function AuthForm() {
             </div>
           </div>
 
-          <div className="mt-8 text-center text-sm text-gray-500 dark:text-gray-400 animate-slide-up" style={{ animationDelay: isLogin ? '0.8s' : '1.0s' }}>
+          <div className="mt-8 text-center text-sm text-gray-500 dark:text-gray-400 animate-slide-up" style={{ animationDelay: isLogin ? '0.8s' : '1.3s' }}>
             <p className="font-urdu">صحت نامہ - مقامی لوگوں کے لیے خودکار طبی تاریخ</p>
             <p className="mt-1">Sehat Nama - Automated Medical History for Local People</p>
           </div>
