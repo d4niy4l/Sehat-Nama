@@ -1,0 +1,291 @@
+'use client'
+
+import { useState } from 'react'
+import { User } from '@supabase/supabase-js'
+import { authUtils } from '@/lib/auth-utils'
+import { useRouter } from 'next/navigation'
+import { Button } from '@/components/ui/button'
+import { ThemeToggle } from '@/components/theme-toggle'
+import { 
+  Heart, 
+  Stethoscope, 
+  FileText, 
+  User as UserIcon, 
+  Settings, 
+  LogOut,
+  Plus,
+  History,
+  Shield,
+  Users,
+  Calendar,
+  Activity
+} from 'lucide-react'
+
+interface DashboardContentProps {
+  user: User
+}
+
+export default function DashboardContent({ user }: DashboardContentProps) {
+  const [loading, setLoading] = useState(false)
+  const router = useRouter()
+
+  const handleSignOut = async () => {
+    setLoading(true)
+    try {
+      await authUtils.signOut()
+      router.push('/')
+    } catch (error) {
+      console.error('Error signing out:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const stats = [
+    {
+      title: 'Total Patients',
+      value: '1,234',
+      change: '+12%',
+      icon: Users,
+      color: 'text-blue-600',
+      bgColor: 'bg-blue-100',
+    },
+    {
+      title: 'Medical Records',
+      value: '5,678',
+      change: '+8%',
+      icon: FileText,
+      color: 'text-green-600',
+      bgColor: 'bg-green-100',
+    },
+    {
+      title: 'This Month',
+      value: '234',
+      change: '+15%',
+      icon: Calendar,
+      color: 'text-purple-600',
+      bgColor: 'bg-purple-100',
+    },
+    {
+      title: 'Active Cases',
+      value: '89',
+      change: '+3%',
+      icon: Activity,
+      color: 'text-orange-600',
+      bgColor: 'bg-orange-100',
+    },
+  ]
+
+  const recentActivities = [
+    {
+      id: 1,
+      patient: 'احمد علی',
+      action: 'New medical record created',
+      time: '2 hours ago',
+      type: 'record',
+    },
+    {
+      id: 2,
+      patient: 'فاطمہ خان',
+      action: 'History updated',
+      time: '4 hours ago',
+      type: 'update',
+    },
+    {
+      id: 3,
+      patient: 'محمد حسن',
+      action: 'Appointment scheduled',
+      time: '6 hours ago',
+      type: 'appointment',
+    },
+    {
+      id: 4,
+      patient: 'عائشہ احمد',
+      action: 'Follow-up completed',
+      time: '1 day ago',
+      type: 'followup',
+    },
+  ]
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-white to-medical-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+      {/* Header */}
+      <header className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border-b border-gray-200 dark:border-gray-700 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16">
+            <div className="flex items-center">
+              <div className="flex items-center">
+                <div className="bg-primary-100 dark:bg-primary-900 rounded-lg p-2 mr-3 animate-float">
+                  <Heart className="h-6 w-6 text-primary-600 dark:text-primary-400" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-gray-900 dark:text-white font-urdu">صحت نامہ</h1>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Sehat Nama</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex items-center space-x-4">
+              <ThemeToggle />
+              <div className="text-right">
+                <p className="text-sm font-medium text-gray-900 dark:text-white">
+                  {user.email}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 font-urdu">مرحبا</p>
+              </div>
+              <Button
+                onClick={handleSignOut}
+                disabled={loading}
+                variant="outline"
+                size="sm"
+                className="flex items-center"
+              >
+                <LogOut className="h-4 w-4 mr-2" />
+                {loading ? 'Signing out...' : 'Sign Out'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Welcome Section */}
+        <div className="mb-8 animate-fade-in">
+          <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-2 animate-slide-up">
+            Welcome to Sehat Nama
+          </h2>
+          <p className="text-lg text-gray-600 dark:text-gray-400 font-urdu animate-slide-up" style={{ animationDelay: '0.1s' }}>
+            آپ کے طبی تاریخ کے انتظام کے لیے آپ کا ڈیش بورڈ
+          </p>
+        </div>
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {stats.map((stat, index) => (
+            <div key={index} className="card p-6 animate-scale-in" style={{ animationDelay: `${0.2 + index * 0.1}s` }}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">
+                    {stat.title}
+                  </p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {stat.value}
+                  </p>
+                  <p className="text-sm text-primary-600 dark:text-primary-400 font-medium">
+                    {stat.change} from last month
+                  </p>
+                </div>
+                <div className={`${stat.bgColor} dark:bg-gray-700 rounded-lg p-3`}>
+                  <stat.icon className={`h-6 w-6 ${stat.color} dark:text-white`} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Quick Actions */}
+          <div className="lg:col-span-1">
+            <div className="card p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                Quick Actions
+              </h3>
+              <div className="space-y-3">
+                <Button className="w-full justify-start" variant="outline">
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Patient Record
+                </Button>
+                <Button className="w-full justify-start" variant="outline">
+                  <FileText className="h-4 w-4 mr-2" />
+                  View All Records
+                </Button>
+                <Button className="w-full justify-start" variant="outline">
+                  <Calendar className="h-4 w-4 mr-2" />
+                  Schedule Appointment
+                </Button>
+                <Button className="w-full justify-start" variant="outline">
+                  <History className="h-4 w-4 mr-2" />
+                  Medical History
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Recent Activity */}
+          <div className="lg:col-span-2">
+            <div className="card p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                Recent Activity
+              </h3>
+              <div className="space-y-4">
+                {recentActivities.map((activity) => (
+                  <div key={activity.id} className="flex items-center space-x-4 p-3 bg-gray-50 rounded-lg">
+                    <div className="bg-primary-100 rounded-full p-2">
+                      <Stethoscope className="h-4 w-4 text-primary-600" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-gray-900">
+                        {activity.patient}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        {activity.action}
+                      </p>
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      {activity.time}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Features Section */}
+        <div className="mt-12">
+          <h3 className="text-2xl font-bold text-gray-900 mb-6 text-center">
+            Key Features
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="card p-6 text-center">
+              <div className="bg-primary-100 rounded-full p-4 w-16 h-16 mx-auto mb-4">
+                <Stethoscope className="h-8 w-8 text-primary-600" />
+              </div>
+              <h4 className="text-lg font-semibold text-gray-900 mb-2">
+                Automated History Taking
+              </h4>
+              <p className="text-gray-600 font-urdu">
+                خودکار طبی تاریخ لینا
+              </p>
+            </div>
+            
+            <div className="card p-6 text-center">
+              <div className="bg-green-100 rounded-full p-4 w-16 h-16 mx-auto mb-4">
+                <Shield className="h-8 w-8 text-green-600" />
+              </div>
+              <h4 className="text-lg font-semibold text-gray-900 mb-2">
+                Secure & Private
+              </h4>
+              <p className="text-gray-600 font-urdu">
+                محفوظ اور نجی
+              </p>
+            </div>
+            
+            <div className="card p-6 text-center">
+              <div className="bg-purple-100 rounded-full p-4 w-16 h-16 mx-auto mb-4">
+                <Users className="h-8 w-8 text-purple-600" />
+              </div>
+              <h4 className="text-lg font-semibold text-gray-900 mb-2">
+                Community Focused
+              </h4>
+              <p className="text-gray-600 font-urdu">
+                کمیونٹی پر مبنی
+              </p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  )
+}
