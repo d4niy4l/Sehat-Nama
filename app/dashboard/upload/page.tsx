@@ -1,6 +1,10 @@
 "use client"
 
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useState, useEffect } from 'react'
+import { useSupabase } from '@/components/supabase-provider'
+import { supabase } from '@/lib/supabase'
+import { useRouter } from 'next/navigation'
+import { LoadingSpinner } from '@/components/ui/spinner'
 import { Upload, FileText, CheckCircle, XCircle, Loader2, LogOut, Heart, Moon, Sun, X, AlertCircle } from 'lucide-react'
 
 // Mock components - replace with your actual imports
@@ -131,8 +135,16 @@ const UploadDropzone: React.FC<UploadDropzoneProps> = ({ onFilesChange, files })
 }
 
 export default function UploadPage() {
-  // Mock user data - replace with your actual auth
-  const user = { id: 'user123', email: 'patient@example.com' }
+  // Use real Supabase auth
+  const { user, loading } = useSupabase()
+  const displayName = loading ? 'Loading…' : (user?.user_metadata?.full_name ?? user?.email ?? 'Patient')
+  const router = useRouter()
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/')
+    }
+  }, [user, loading, router])
   const [theme, setTheme] = useState<'light'|'dark'>('light')
   
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
@@ -177,24 +189,22 @@ export default function UploadPage() {
         validateFile(file)
       }
 
-      // Parallel upload with progress tracking
-      const uploadPromises = selectedFiles.map(async (file, index) => {
-        setUploadProgress(prev => ({ ...prev, [index]: 0 }))
-        
-        // Simulate upload progress (replace with actual Supabase upload)
-        await new Promise(resolve => setTimeout(resolve, 500))
-        setUploadProgress(prev => ({ ...prev, [index]: 30 }))
-        
-        const path = `${user.id}/${Date.now()}-${file.name}`
-        
-        // Mock upload - replace with actual Supabase call
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        setUploadProgress(prev => ({ ...prev, [index]: 100 }))
-        
-        return { key: path, name: file.name }
+      // Upload via server-side API to keep bucket name private and use service role key
+      const formData = new FormData()
+      for (const file of selectedFiles) {
+        formData.append('files', file)
+      }
+      formData.append('userId', user.id)
+
+      // POST to server route which uses SUPABASE_SERVICE_ROLE_KEY and private bucket
+      const res = await fetch('/api/upload-files', {
+        method: 'POST',
+        body: formData,
       })
 
-      const uploaded = await Promise.all(uploadPromises)
+      if (!res.ok) throw new Error('Upload failed on server')
+      const json = await res.json()
+      const uploaded = json.uploaded ?? []
       setMessage({ type: 'success', text: `Successfully uploaded ${uploaded.length} file(s)` })
 
       // Mock API call for summary
@@ -223,6 +233,17 @@ export default function UploadPage() {
     setSummary(null)
     setMessage(null)
     setUploadProgress({})
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-primary-50 via-white to-medical-50 flex items-center justify-center">
+        <div className="text-center">
+          <LoadingSpinner />
+          <p className="mt-4 text-gray-600 font-urdu">لوڈ ہو رہا ہے...</p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -265,11 +286,19 @@ export default function UploadPage() {
                 </button>
                 
                 <div className="hidden md:block text-right">
-                  <p className="text-sm font-medium text-gray-900 dark:text-white">{user?.email}</p>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">{displayName}</p>
                   <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">مریض • Patient</p>
                 </div>
                 
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" onClick={async () => {
+                  try {
+                    await supabase.auth.signOut()
+                    router.push('/')
+                  } catch (err: any) {
+                    console.error('Sign out failed', err)
+                    setMessage({ type: 'error', text: 'Sign out failed. Please try again.' })
+                  }
+                }}>
                   <LogOut className="h-4 w-4" />
                   <span className="hidden sm:inline">Sign Out</span>
                 </Button>
