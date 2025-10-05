@@ -103,7 +103,7 @@ export default function MedicalHistoriesPage() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <MedicalHistories userEmail="thirstycheems@gmail.com" />
+        <MedicalHistories userEmail={user.email || "thirstycheems@gmail.com"} />
       </main>
     </div>
   )
