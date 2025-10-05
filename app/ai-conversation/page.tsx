@@ -1,677 +1,642 @@
-"use client"
+'use client'
 
-import React, { useEffect, useState, useRef } from 'react'
-import { startInterviewProxy, sendMessageProxy, getHistoryProxy } from '../../lib/ai-client'
-import {Spinner} from '../../components/ui/spinner'
-// Import jsPDF dynamically
-let jsPDF: any = null
-async function ensureJsPDF() {
-  if (!jsPDF) {
-    const mod = await import('jspdf').catch(() => null)
-    jsPDF = mod?.jsPDF ?? mod
-  }
-  return jsPDF
+import { useState, useEffect, useRef } from 'react'
+import { useSupabase } from '@/components/supabase-provider'
+import { useRouter } from 'next/navigation'
+import { Button } from '@/components/ui/button'
+import { ArrowLeft, Home, Loader2, Volume2, Mic, MessageCircle } from 'lucide-react'
+
+interface AIResponse {
+  session_id: string
+  message: string
+  audio_base64?: string
+  is_complete?: boolean
+  collected_data?: any
+  error?: string
+  details?: string
 }
 
-type Message = { role: string; content: string; timestamp?: string }
-
-const PLACEHOLDER_NAME = 'Patient-XXXX'
+interface TranscriptionResponse {
+  text: string
+  error?: string
+}
 
 export default function AIConversationPage() {
-  const [messages, setMessages] = useState<Message[]>([])
+  const { user } = useSupabase()
+  const router = useRouter()
+  
+  // Core state
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [recording, setRecording] = useState(false)
-  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null)
-  const [audioChunks, setAudioChunks] = useState<Blob[]>([])
-  const [backendHealthy, setBackendHealthy] = useState<boolean | null>(null)
-  const [starterAudioQueued, setStarterAudioQueued] = useState<ArrayBuffer | null>(null)
-  const [userInteracted, setUserInteracted] = useState(false)
-  const [useStreaming, setUseStreaming] = useState(false)
-  const [ws, setWs] = useState<WebSocket | null>(null)
-  const [error, setError] = useState<string | null>(null) // For UI errors
-const currentAudioRef = useRef<HTMLAudioElement | null>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [status, setStatus] = useState('Click "Start Medical Interview" to begin')
+  const [isRecording, setIsRecording] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
   const [isPlayingAudio, setIsPlayingAudio] = useState(false)
-//const currentAudioRef = useRef<HTMLAudioElement | null>(null)
-useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-// REPLACE the playAudioFromArrayBuffer function
-function playAudioFromArrayBuffer(buffer: ArrayBuffer, mimeType: string) {
-  // Stop any currently playing audio first
-  if (currentAudioRef.current) {
-    currentAudioRef.current.pause()
-    currentAudioRef.current = null
-  }
+  const [interviewStarted, setInterviewStarted] = useState(false)
+  const [interviewComplete, setInterviewComplete] = useState(false)
+  
+  // New subtitle state
+  const [currentSubtitle, setCurrentSubtitle] = useState('')
+  const [userResponse, setUserResponse] = useState('')
+  
+  // Recording state
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null)
+  
+  // API base URL
+  const apiBase = 'http://localhost:8000'
 
-  return new Promise<void>((resolve, reject) => {
-    try {
-      setIsPlayingAudio(true)
-      
-      const blob = new Blob([buffer], { type: mimeType })
-      const url = URL.createObjectURL(blob)
-      const audio = new Audio(url)
-      
-      currentAudioRef.current = audio
-      
-      audio.onended = () => {
-        console.log('Audio playback finished')
-        setIsPlayingAudio(false)
-        URL.revokeObjectURL(url)
-        currentAudioRef.current = null
-        resolve()
-      }
-      
-      audio.onerror = (err) => {
-        console.error('Audio playback error:', err)
-        setIsPlayingAudio(false)
-        URL.revokeObjectURL(url)
-        currentAudioRef.current = null
-        reject(err)
-      }
-      
-      audio.play().catch(err => {
-        console.error('Audio play failed:', err)
-        setIsPlayingAudio(false)
-        URL.revokeObjectURL(url)
-        currentAudioRef.current = null
-        reject(err)
-      })
-    } catch (err) {
-      console.error('Error creating audio:', err)
-      setIsPlayingAudio(false)
-      reject(err)
-    }
-  })
-}
-  // Start interview with retry logic
-  // useEffect(() => {
-  //   let mounted = true
-  //   async function startWithRetry(attempts = 3) {
-  //     for (let i = 0; i < attempts; i++) {
-  //       try {
-  //         setLoading(true)
-  //         const res = await startInterviewProxy()
-  //         if (!mounted) return
-  //         const sid = res.session_id || res.sessionId || null
-  //         setSessionId(sid)
-  //         const aiMsg = res.message || res.ai_message || 'السلام علیکم۔ آپ کا پورا نام کیا ہے؟' // Fallback greeting
-  //         setMessages([{ role: 'assistant', content: aiMsg, timestamp: new Date().toLocaleTimeString() }])
-  //         setError(null) // Clear errors
-
-  //         // Prefetch TTS
-  //         try {
-  //           const ttsRes = await fetch('/api/ai-proxy/tts', {
-  //             method: 'POST',
-  //             headers: { 'Content-Type': 'application/json' },
-  //             body: JSON.stringify({ text: aiMsg, voice_id: 'v_meklc281' })
-  //           })
-  //           if (ttsRes.ok) {
-  //             const ab = await ttsRes.arrayBuffer()
-  //             setStarterAudioQueued(ab)
-  //           }
-  //         } catch (err) {
-  //           console.warn('TTS prefetch failed', err)
-  //         }
-  //         return // Success, exit loop
-  //       } catch (err) {
-  //         console.error('Start interview failed (attempt ' + (i + 1) + ')', err)
-  //         setError('Greeting failed to load. Retrying...')
-  //       } finally {
-  //         setLoading(false)
-  //       }
-  //     }
-  //     setError('Failed to load greeting after retries. Check backend.')
-  //   }
-  //   startWithRetry()
-  //   return () => { mounted = false }
-  // }, [])
-// useEffect(() => {
-//   let mounted = true
-//   async function startWithRetry(attempts = 3) {
-//     for (let i = 0; i < attempts; i++) {
-//       try {
-//         setLoading(true)
-//         const res = await startInterviewProxy()
-//         if (!mounted) return
-//         const sid = res.session_id || res.sessionId || null
-//         setSessionId(sid)
-//         const aiMsg = res.message || res.ai_message || 'السلام علیکم۔ آپ کا پورا نام کیا ہے؟'
-//         setMessages([{ role: 'assistant', content: aiMsg, timestamp: new Date().toLocaleTimeString() }])
-//         setError(null)
-
-//         // Prefetch TTS
-//         try {
-//           const formData = new FormData()
-//           formData.append('text', aiMsg)
-//           formData.append('voice_id', 'v_meklc281')
-//           formData.append('output_format', 'MP3_22050_32')
-//           formData.append('save_file', 'false')
-
-//           const ttsRes = await fetch('../api/ai-proxy/tts', {
-//             method: 'POST',
-//             body: formData
-//           })
-//           if (ttsRes.ok) {
-//             const ab = await ttsRes.arrayBuffer()
-//             setStarterAudioQueued(ab)
-//           } else {
-//             console.warn('TTS prefetch failed', await ttsRes.text())
-//           }
-//         } catch (err) {
-//           console.warn('TTS prefetch failed', err)
-//         }
-//         return
-//       } catch (err) {
-//         console.error('Start interview failed (attempt ' + (i + 1) + ')', err)
-//         setError('Greeting failed to load. Retrying...')
-//       } finally {
-//         setLoading(false)
-//       }
-//     }
-//     setError('Failed to load greeting after retries. Check backend.')
-//   }
-//   startWithRetry()
-//   return () => { mounted = false }
-// }, [])
-useEffect(() => {
-    let mounted = true
-    async function startInterview() {
-      try {
-        setLoading(true)
-        const res = await startInterviewProxy()
-        if (!mounted) return
-        setSessionId(res.session_id)
-        const aiMsg = res.message || 'السلام علیکم۔ آپ کا پورا نام کیا ہے؟'
-        setMessages([{ role: 'assistant', content: aiMsg, timestamp: new Date().toLocaleTimeString() }])
-        
-        // Try to play audio immediately
-        try {
-          const formData = new FormData()
-          formData.append('text', aiMsg)
-          formData.append('voice_id', 'v_meklc281')
-          const ttsRes = await fetch('../api/ai-proxy/tts', { method: 'POST', body: formData })
-          if (ttsRes.ok) {
-            const ab = await ttsRes.arrayBuffer()
-            setStarterAudioQueued(ab)
-            playAudioFromArrayBuffer(ab, 'audio/mpeg').catch(() => {})
-          }
-        } catch (err) {
-          console.warn('TTS prefetch failed')
-        }
-      } catch (err) {
-        setError('Failed to start interview')
-      } finally {
-        setLoading(false)
-      }
-    }
-    startInterview()
-    return () => { mounted = false }
-  }, [])
-  // Play starter TTS after user interaction
+  // Redirect if not authenticated
   useEffect(() => {
-    if (!userInteracted || !starterAudioQueued) return
-    playAudioFromArrayBuffer(starterAudioQueued, 'audio/mpeg')
-    setStarterAudioQueued(null)
-  }, [userInteracted, starterAudioQueued])
+    if (!user) {
+      router.push('/')
+    }
+  }, [user, router])
 
   // Setup media recorder
-  const audioChunksRef = useRef<Blob[]>([])
   useEffect(() => {
-  if (!navigator.mediaDevices) {
-    setError('Media devices not available in this browser.')
-    return
-  }
-
-  navigator.mediaDevices.getUserMedia({ 
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      sampleRate: 16000
-    } 
-  })
-  .then(stream => {
-    const options = { mimeType: 'audio/webm;codecs=opus' }
-    
-    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-      const fallbacks = [
-        'audio/webm',
-        'audio/ogg;codecs=opus',
-        'audio/mp4',
-      ]
-      
-      for (const type of fallbacks) {
-        if (MediaRecorder.isTypeSupported(type)) {
-          options.mimeType = type
-          break
-        }
-      }
-    }
-    
-    console.log('Using media recorder with:', options.mimeType)
-    
-    const mr = new MediaRecorder(stream, options)
-    setMediaRecorder(mr)
-    
-    // CRITICAL: Store chunks in ref, not state
-    mr.ondataavailable = (ev) => {
-      if (ev.data.size > 0) {
-        console.log('Chunk received:', ev.data.size, 'bytes')
-        audioChunksRef.current.push(ev.data)
-      }
-    }
-    
-    mr.onerror = (err) => {
-      console.error('MediaRecorder error:', err)
-      setError('Recording error occurred.')
-    }
-  })
-  .catch(err => {
-    console.error('Mic access denied:', err)
-    setError('Microphone access denied. Please allow microphone and refresh.')
-  })
-}, [])
-
-// 3. REPLACE Start Recording Handler
-const handleStartRecording = () => {
-  // CRITICAL: Don't allow recording while audio is playing
-  if (isPlayingAudio) {
-    console.log('Waiting for audio to finish before recording...')
-    setError('Please wait for the question to finish playing.')
-    return
-  }
-  
-  // If there's queued audio waiting, trigger it first (for autoplay blocked scenarios)
-  if (starterAudioQueued && !userInteracted) {
-    setUserInteracted(true)
-    setError('Playing question first. Please wait...')
-    return
-  }
-  
-  if (!mediaRecorder) {
-    setError('No media recorder available.')
-    return
-  }
-  
-  // Clear previous chunks
-  audioChunksRef.current = []
-  
-  try {
-    mediaRecorder.start(100)
-    setRecording(true)
-    console.log('Recording started')
-    setError(null) // Clear any previous errors
-  } catch (err) {
-    console.error('Failed to start recording:', err)
-    setError('Failed to start recording.')
-  }
-}
-  // Handle start recording
-  // const handleStartRecording = () => {
-  //   setUserInteracted(true)
-  //   if (!mediaRecorder) return setError('No media recorder available.')
-  //   setAudioChunks([])
-  //   mediaRecorder.start()
-  //   setRecording(true)
-  // }
-
-  // Handle stop and send recording (with transcribe fix)
- const handleStopAndSendRecording = async () => {
-  if (!mediaRecorder || mediaRecorder.state === 'inactive') return
-  
-  setRecording(false)
-  setLoading(true)
-
-  try {
-    // Wait for stop event
-    const stopPromise = new Promise<void>((resolve) => {
-      mediaRecorder.onstop = () => {
-        console.log('MediaRecorder stopped')
-        resolve()
-      }
-    })
-    
-    mediaRecorder.stop()
-    await stopPromise
-    
-    // Give extra time for last chunks
-    await new Promise(resolve => setTimeout(resolve, 200))
-    
-    const chunks = audioChunksRef.current
-    console.log('Total chunks collected:', chunks.length)
-    
-    if (chunks.length === 0) {
-      throw new Error('No audio data recorded. Please try again.')
-    }
-    
-    // Create blob from chunks
-    const mimeType = mediaRecorder.mimeType || 'audio/webm'
-    const audioBlob = new Blob(chunks, { type: mimeType })
-    
-    console.log(`Audio blob: ${audioBlob.size} bytes, type: ${mimeType}`)
-    
-    if (audioBlob.size === 0) {
-      throw new Error('Audio recording is empty. Please speak louder or check microphone.')
-    }
-    
-    // Minimum size check (less than 1KB is suspicious)
-    if (audioBlob.size < 1000) {
-      console.warn('Audio seems very short:', audioBlob.size, 'bytes')
-    }
-    
-    // Determine extension
-    const extension = mimeType.includes('webm') ? 'webm' : 
-                     mimeType.includes('ogg') ? 'ogg' : 
-                     mimeType.includes('mp4') ? 'mp4' : 'webm'
-    
-    // Send to backend
-    const form = new FormData()
-    form.append('file', audioBlob, `recording.${extension}`)
-    form.append('model', 'whisper-large-v3')
-
-    console.log('Sending to STT API...')
-
-    const res = await fetch('../api/ai-proxy/transcribe', { 
-      method: 'POST', 
-      body: form 
-    })
-    
-    if (!res.ok) {
-      const errorText = await res.text()
-      console.error('STT error:', errorText)
-      throw new Error(`STT failed: ${res.statusText}`)
-    }
-    
-    const json = await res.json()
-    console.log('Transcription received:', json)
-    
-    const transcribed = json.text || ''
-    if (!transcribed) {
-      throw new Error('No transcription text returned')
-    }
-
-    console.log('Transcribed text:', transcribed)
-    setInput(transcribed)
-    await send(transcribed)
-    setError(null)
-    
-  } catch (err) {
-    console.error('Recording/transcription error:', err)
-    setError(`${String(err)}`)
-  } finally {
-    setLoading(false)
-    audioChunksRef.current = [] // Clear for next recording
-  }
-}
-const handleMicToggle = async () => {
-    if (recording) {
-      // Stop recording
-      if (!mediaRecorder || mediaRecorder.state === 'inactive') return
-      setRecording(false)
-      setLoading(true)
-
+    const setupRecorder = async () => {
       try {
-        const stopPromise = new Promise<void>((resolve) => {
-          mediaRecorder.onstop = () => resolve()
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate: 16000
+          }
         })
-        mediaRecorder.stop()
-        await stopPromise
-        await new Promise(resolve => setTimeout(resolve, 200))
-
-        const chunks = audioChunksRef.current
-        if (chunks.length === 0) throw new Error('No audio recorded')
-
-        const audioBlob = new Blob(chunks, { type: 'audio/webm' })
-        if (audioBlob.size === 0) throw new Error('Empty recording')
-
-        const form = new FormData()
-        form.append('file', audioBlob, 'recording.webm')
-        form.append('model', 'whisper-large-v3')
-
-        const res = await fetch('../api/ai-proxy/transcribe', { method: 'POST', body: form })
-        if (!res.ok) throw new Error('Transcription failed')
-
-        const json = await res.json()
-        const transcribed = json.text || ''
-        if (!transcribed) throw new Error('No transcription')
-
-        await sendMessage(transcribed)
-      } catch (err) {
-        setError(String(err))
-      } finally {
-        setLoading(false)
-        audioChunksRef.current = []
+        
+        const recorder = new MediaRecorder(stream, { 
+          mimeType: 'audio/webm;codecs=opus' 
+        })
+        
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) {
+            audioChunksRef.current.push(e.data)
+          }
+        }
+        
+        recorder.onerror = (e) => {
+          console.error('MediaRecorder error:', e)
+          setStatus('Recording error occurred')
+        }
+        
+        setMediaRecorder(recorder)
+      } catch (error) {
+        console.error('Microphone access denied:', error)
+        setStatus('Microphone access denied. Please allow microphone and refresh.')
       }
-    } else {
-      // Start recording
-      if (isPlayingAudio) {
-        setError('Please wait for question to finish')
-        return
-      }
-      if (!mediaRecorder) {
-        setError('Microphone not available')
-        return
-      }
-      audioChunksRef.current = []
-      mediaRecorder.start(100)
-      setRecording(true)
-      setError(null)
     }
+    
+    setupRecorder()
+  }, [])
+
+  // Play audio from base64
+  const playAudioFromBase64 = (audioBase64: string, subtitleText: string = ''): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      try {
+        // Stop any currently playing audio
+        if (currentAudioRef.current) {
+          currentAudioRef.current.pause()
+          currentAudioRef.current = null
+        }
+
+        const audioBlob = new Blob([
+          Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0))
+        ], { type: 'audio/mp3' })
+        
+        const url = URL.createObjectURL(audioBlob)
+        const audio = new Audio(url)
+        currentAudioRef.current = audio
+        
+        setIsPlayingAudio(true)
+        setCurrentSubtitle(subtitleText) // Show subtitle
+        
+        audio.onended = () => {
+          setStatus('🎤 Question finished. Click "Start Recording" to respond.')
+          setIsPlayingAudio(false)
+          setCurrentSubtitle('') // Clear subtitle
+          URL.revokeObjectURL(url)
+          currentAudioRef.current = null
+          resolve()
+        }
+        
+        audio.onerror = (e) => {
+          console.error('Audio playback error:', e)
+          setStatus('❌ Audio playback failed. Click "Start Recording" to respond.')
+          setIsPlayingAudio(false)
+          setCurrentSubtitle('') // Clear subtitle
+          URL.revokeObjectURL(url)
+          currentAudioRef.current = null
+          reject(e)
+        }
+        
+        audio.play().catch(e => {
+          console.error('Audio play failed:', e)
+          setStatus('❌ Audio play failed. Click "Start Recording" to respond.')
+          setIsPlayingAudio(false)
+          setCurrentSubtitle('') // Clear subtitle
+          reject(e)
+        })
+      } catch (e) {
+        console.error('Error creating audio from base64:', e)
+        setStatus('Audio error. Click "Start Recording" to respond.')
+        setIsPlayingAudio(false)
+        reject(e)
+      }
+    })
   }
-  // Send message (text or transcribed)
-  const send = async (msg = input) => {
-  if (!sessionId || !msg) return
-  setUserInteracted(true)
-  setMessages(prev => [...prev, { role: 'user', content: msg, timestamp: new Date().toLocaleTimeString() }])
-  setInput('')
-  setLoading(true)
 
-  try {
-    const res = await sendMessageProxy(sessionId, msg)
-    const aiMsg = res.message || res.ai_message || 'Sorry, no response.'
-    setMessages(prev => [...prev, { role: 'assistant', content: aiMsg, timestamp: new Date().toLocaleTimeString() }])
-
-    // IMPORTANT: Wait for TTS to complete before allowing next recording
+  // TTS fallback
+  const ttsAndPlay = async (text: string): Promise<void> => {
     try {
       const formData = new FormData()
-      formData.append('text', aiMsg)
+      formData.append('text', text)
       formData.append('voice_id', 'v_meklc281')
       formData.append('output_format', 'MP3_22050_32')
       formData.append('save_file', 'false')
 
-      const ttsRes = await fetch('../api/ai-proxy/tts', {
+      const ttsRes = await fetch(`${apiBase}/text-to-speech`, {
         method: 'POST',
         body: formData
       })
       
-      if (ttsRes.ok) {
-        const ab = await ttsRes.arrayBuffer()
-        // Wait for audio to finish playing
-        await playAudioFromArrayBuffer(ab, 'audio/mpeg')
-        console.log('AI response audio finished playing')
-      } else {
-        console.warn('TTS failed, continuing without audio')
-      }
-    } catch (ttsErr) {
-      console.warn('TTS error:', ttsErr)
+      if (!ttsRes.ok) throw new Error('TTS failed')
+      
+      const audioBlob = await ttsRes.blob()
+      const url = URL.createObjectURL(audioBlob)
+      const audio = new Audio(url)
+      currentAudioRef.current = audio
+      
+      setIsPlayingAudio(true)
+      setCurrentSubtitle(text) // Show subtitle
+      
+      return new Promise((resolve, reject) => {
+        audio.onended = () => {
+          setStatus('🎤 Question finished. Click "Start Recording" to respond.')
+          setIsPlayingAudio(false)
+          setCurrentSubtitle('') // Clear subtitle
+          URL.revokeObjectURL(url)
+          currentAudioRef.current = null
+          resolve()
+        }
+        
+        audio.onerror = (e) => {
+          console.error('TTS Audio playback error:', e)
+          setStatus('❌ Audio playback failed. Click "Start Recording" to respond.')
+          setIsPlayingAudio(false)
+          setCurrentSubtitle('') // Clear subtitle
+          URL.revokeObjectURL(url)
+          currentAudioRef.current = null
+          reject(e)
+        }
+        
+        audio.play().catch(e => {
+          console.error('TTS Audio play failed:', e)
+          setStatus('❌ Audio play failed. Click "Start Recording" to respond.')
+          setIsPlayingAudio(false)
+          setCurrentSubtitle('') // Clear subtitle
+          reject(e)
+        })
+      })
+    } catch (error) {
+      console.error('TTS error:', error)
+      setStatus('❌ TTS failed. Click "Start Recording" to respond.')
+      setIsPlayingAudio(false)
+      setCurrentSubtitle('') // Clear subtitle
     }
+  }
+
+  // Start interview
+  const startInterview = async () => {
+    setStatus('🚀 Starting History Taking...')
+    setIsProcessing(true)
     
-    setError(null)
-  } catch (err) {
-    console.error('Send message failed', err)
-    setError('Failed to send message.')
-  } finally {
-    setLoading(false)
-  }
-}
-useEffect(() => {
-  if (!userInteracted || !starterAudioQueued) return
-  
-  playAudioFromArrayBuffer(starterAudioQueued, 'audio/mpeg')
-    .then(() => {
-      console.log('Starter audio finished')
-      setStarterAudioQueued(null)
-    })
-    .catch(err => {
-      console.error('Starter audio failed:', err)
-      setStarterAudioQueued(null)
-    })
-}, [userInteracted, starterAudioQueued])
-  // Export PDF (merge with backend history JSON)
-  async function exportPDF() {
-    const js = await ensureJsPDF()
-    if (!js) return alert('PDF export unavailable. Install jsPDF.')
-
-    let fullHistory = [...messages]
-    if (sessionId) {
-      try {
-        const historyRes = await getHistoryProxy(sessionId) // Assuming you have this proxy function
-        if (historyRes.history) fullHistory = [...fullHistory, ...historyRes.history] // Merge JSON
-      } catch (err) {
-        console.warn('History fetch failed', err)
-      }
-    }
-
-    const doc = new js()
-    doc.setFontSize(12)
-    doc.text('Sehat-Nama Conversation Export', 10, 10)
-    let y = 20
-    fullHistory.forEach(m => {
-      const prefix = m.role === 'user' ? `${PLACEHOLDER_NAME}: ` : 'AI: '
-      const lines = doc.splitTextToSize(prefix + m.content, 180)
-      doc.text(lines, 10, y)
-      y += lines.length * 7
-      if (y > 270) { doc.addPage(); y = 10 }
-    })
-
-    const pdfBlob = doc.output('blob')
-    const url = URL.createObjectURL(pdfBlob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'sehat-nama-conversation.pdf'
-    a.click()
-    URL.revokeObjectURL(url)
-
-    // Upload to server
     try {
-      const form = new FormData()
-      form.append('userId', 'anon_user')
-      form.append('file', new File([pdfBlob], 'sehat-nama-conversation.pdf', { type: 'application/pdf' }))
-      await fetch('/api/upload-files', { method: 'POST', body: form })
-    } catch (err) {
-      console.error('PDF upload failed', err)
-    }
-  }
-const sendMessage = async (msg: string) => {
-    if (!sessionId || !msg) return
-    setMessages(prev => [...prev, { role: 'user', content: msg, timestamp: new Date().toLocaleTimeString() }])
-    setLoading(true)
-
-    try {
-      const res = await sendMessageProxy(sessionId, msg)
-      const aiMsg = res.message || 'Sorry, no response.'
-      setMessages(prev => [...prev, { role: 'assistant', content: aiMsg, timestamp: new Date().toLocaleTimeString() }])
-
-      // Play TTS
-      const formData = new FormData()
-      formData.append('text', aiMsg)
-      formData.append('voice_id', 'v_meklc281')
-      const ttsRes = await fetch('../api/ai-proxy/transcribe', { method: 'POST', body: formData })
-      if (ttsRes.ok) {
-        const ab = await ttsRes.arrayBuffer()
-        await playAudioFromArrayBuffer(ab, 'audio/mpeg')
+      const res = await fetch(`${apiBase}/api/start-interview-with-voice`, { 
+        method: 'POST' 
+      })
+      const data: AIResponse = await res.json()
+      
+      if (data.error) {
+        throw new Error(data.details || data.error)
       }
-    } catch (err) {
-      setError('Failed to send message')
+      
+      setSessionId(data.session_id)
+      setInterviewStarted(true)
+      
+      // Play the initial question audio
+      if (data.audio_base64) {
+        setStatus('🔊 Playing question...')
+        await playAudioFromBase64(data.audio_base64, data.message)
+      } else {
+        // Fallback to TTS if no audio
+        setStatus('🔊 Playing question...')
+        await ttsAndPlay(data.message)
+      }
+    } catch (error) {
+      console.error('Error starting interview:', error)
+      setStatus(`❌ Error starting interview: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
-      setLoading(false)
+      setIsProcessing(false)
     }
   }
-  // ... (keep your existing playAudioFromArrayBuffer, exportWav, etc. functions unchanged)
+
+  // Start recording
+  const startRecording = async () => {
+    if (!mediaRecorder || isPlayingAudio) return
+    
+    try {
+      audioChunksRef.current = []
+      mediaRecorder.start()
+      setIsRecording(true)
+      setUserResponse('') // Clear previous response
+      setStatus('🎤 Recording... Press Stop to send')
+    } catch (error) {
+      console.error('Error starting recording:', error)
+      setStatus(`❌ Error accessing microphone: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
+  // Stop recording and send
+  const stopRecording = async () => {
+    if (!mediaRecorder || mediaRecorder.state !== 'recording') return
+    
+    setIsRecording(false)
+    setIsProcessing(true)
+    setStatus('⚙️ Processing...')
+    
+    try {
+      // Stop recording and wait for data
+      const stopPromise = new Promise<void>((resolve) => {
+        mediaRecorder.onstop = () => resolve()
+      })
+      
+      mediaRecorder.stop()
+      await stopPromise
+      
+      // Create audio blob
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+      
+      // Transcribe audio
+      const formData = new FormData()
+      formData.append('file', audioBlob, 'recording.webm')
+      formData.append('model', 'whisper-large-v3')
+
+      const transRes = await fetch(`${apiBase}/transcribe`, {
+        method: 'POST',
+        body: formData
+      })
+      
+      if (!transRes.ok) {
+        throw new Error('Transcription failed')
+      }
+      
+      const trans: TranscriptionResponse = await transRes.json()
+      if (trans.error) {
+        throw new Error(trans.error)
+      }
+
+      // Show transcribed text
+      setUserResponse(trans.text)
+      console.log('User said:', trans.text)
+
+      // Send message to AI
+      const sendRes = await fetch(`${apiBase}/api/send-message-with-voice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          session_id: sessionId, 
+          message: trans.text 
+        })
+      })
+      
+      if (!sendRes.ok) {
+        throw new Error('Failed to send message')
+      }
+      
+      const resp: AIResponse = await sendRes.json()
+      if (resp.error) {
+        throw new Error(resp.details || resp.error)
+      }
+
+      if (resp.is_complete) {
+        setStatus('🎉 History Taking complete!')
+        setInterviewComplete(true)
+        await saveHistory(resp.collected_data)
+      } else {
+        console.log('AI Response:', resp.message)
+        
+        // Play audio response if available
+        if (resp.audio_base64) {
+          setStatus('🔊 Playing AI response...')
+          await playAudioFromBase64(resp.audio_base64, resp.message)
+        } else {
+          // Fallback to TTS
+          setStatus('🔊 Playing AI response...')
+          await ttsAndPlay(resp.message)
+        }
+      }
+    } catch (error) {
+      console.error('Error processing recording:', error)
+      setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      setIsPlayingAudio(false)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  // Save medical history
+  const saveHistory = async (collectedData: any) => {
+    if (!user?.email) return
+    
+    try {
+      // Get the formatted history for display
+      const historyRes = await fetch(`${apiBase}/api/get-history?session_id=${sessionId}&view=patient`)
+      const historyData = await historyRes.json()
+      if (historyData.error) {
+        throw new Error(historyData.error)
+      }
+      
+      console.log('History retrieved:', historyData.history)
+      
+      // Store the medical data in Supabase
+      const storeRes = await fetch(`${apiBase}/api/store-medical-history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_email: user.email,
+          medical_data: collectedData
+        })
+      })
+      
+      const storeData = await storeRes.json()
+      
+      if (storeData.success) {
+        console.log('Medical history stored successfully:', storeData)
+        setStatus('History Taking complete! Medical history saved to database.')
+      } else {
+        throw new Error(storeData.detail || 'Failed to store medical history')
+      }
+    } catch (error) {
+      console.error('Failed to save history:', error)
+      setStatus(`History Taking complete, but failed to save: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
+  // Navigation
+  const goBack = () => router.push('/dashboard')
+  const goHome = () => router.push('/')
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-teal-50 to-emerald-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-emerald-50 flex flex-col">
+    <div className="min-h-screen bg-gradient-to-br from-teal-50 via-blue-50 to-emerald-50 flex flex-col relative overflow-hidden">
+      {/* Animated background elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-20 left-20 w-32 h-32 bg-teal-200 rounded-full opacity-20 animate-pulse"></div>
+        <div className="absolute bottom-32 right-20 w-24 h-24 bg-blue-200 rounded-full opacity-20 animate-bounce"></div>
+        <div className="absolute top-1/2 left-10 w-16 h-16 bg-emerald-200 rounded-full opacity-20 animate-pulse"></div>
+      </div>
+
       {/* Header */}
-      <div className="bg-white/80 backdrop-blur-lg shadow-lg p-6 text-center">
-        <h1 className="text-3xl font-bold text-indigo-800">صحت نامہ - Sehat Nama</h1>
-        <p className="text-gray-600 mt-2">آواز سے طبی تاریخ - Voice Medical History</p>
+      <div className="relative z-10 p-6 flex justify-between items-center bg-white/80 backdrop-blur-lg shadow-lg">
+        <Button onClick={goBack} variant="outline" size="sm" className="flex items-center space-x-2 hover:bg-teal-50">
+          <ArrowLeft className="h-4 w-4" />
+          <span>Dashboard</span>
+        </Button>
+        <div className="text-center">
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-teal-600 to-blue-600 bg-clip-text text-transparent">
+            صحت نامہ
+          </h1>
+          <p className="text-sm text-gray-600 font-medium">AI Medical History Taking</p>
+        </div>
+        <Button onClick={goHome} variant="outline" size="sm" className="flex items-center space-x-2 hover:bg-teal-50">
+          <Home className="h-4 w-4" />
+          <span>Home</span>
+        </Button>
       </div>
 
-      {/* Status Indicators */}
-      <div className="p-4 space-y-2">
-        {isPlayingAudio && (
-          <div className="bg-blue-100 border-2 border-blue-500 rounded-lg p-4 flex items-center justify-center space-x-3 animate-pulse">
-            <div className="flex space-x-1">
-              <div className="w-2 h-8 bg-blue-600 rounded animate-bounce" style={{ animationDelay: '0ms' }}></div>
-              <div className="w-2 h-8 bg-blue-600 rounded animate-bounce" style={{ animationDelay: '150ms' }}></div>
-              <div className="w-2 h-8 bg-blue-600 rounded animate-bounce" style={{ animationDelay: '300ms' }}></div>
-            </div>
-            <span className="text-blue-800 font-semibold">🔊 AI سوال سنا رہا ہے...</span>
-          </div>
-        )}
-        {!isPlayingAudio && !recording && !loading && messages.length > 0 && (
-          <div className="bg-green-100 border border-green-500 rounded-lg p-3 text-center">
-            <span className="text-green-800">✓ اب آپ جواب ریکارڈ کر سکتے ہیں</span>
-          </div>
-        )}
-        {error && (
-          <div className="bg-red-100 border border-red-500 rounded-lg p-3 text-center">
-            <span className="text-red-800">{error}</span>
-          </div>
-        )}
-      </div>
-
-      {/* Messages Container */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4 pb-32">
-        {messages.map((m, idx) => (
-          <div key={idx} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[80%] p-4 rounded-2xl shadow-lg ${
-              m.role === 'user' 
-                ? 'bg-indigo-600 text-white' 
-                : 'bg-white text-gray-900'
-            }`}>
-              <div className="font-semibold text-sm mb-1">{m.role === 'user' ? 'آپ' : 'AI'}</div>
-              <div className="whitespace-pre-wrap">{m.content}</div>
-              <div className="text-xs opacity-70 mt-1">{m.timestamp}</div>
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col items-center justify-center space-y-8 p-8 relative z-10">
+        {/* Large Floating Ball */}
+        <div className="relative flex flex-col items-center">
+          <div className={`relative w-56 h-56 rounded-full transition-all duration-700 ease-in-out transform ${
+            isPlayingAudio 
+              ? 'bg-gradient-to-br from-blue-400 via-blue-500 to-blue-600 animate-bounce scale-110 shadow-2xl shadow-blue-500/50' 
+              : isRecording 
+              ? 'bg-gradient-to-br from-red-400 via-red-500 to-red-600 animate-pulse scale-110 shadow-2xl shadow-red-500/50' 
+              : isProcessing
+              ? 'bg-gradient-to-br from-yellow-400 via-yellow-500 to-yellow-600 animate-spin scale-105 shadow-2xl shadow-yellow-500/50'
+              : 'bg-gradient-to-br from-teal-400 via-teal-500 to-teal-600 hover:scale-105 shadow-xl hover:shadow-2xl'
+          }`}>
+            <div className="w-full h-full rounded-full flex items-center justify-center">
+              {isPlayingAudio ? (
+                <Volume2 className="h-24 w-24 text-white animate-pulse" />
+              ) : isRecording ? (
+                <Mic className="h-24 w-24 text-white animate-pulse" />
+              ) : isProcessing ? (
+                <Loader2 className="h-24 w-24 text-white animate-spin" />
+              ) : (
+                <MessageCircle className="h-24 w-24 text-white" />
+              )}
             </div>
           </div>
-        ))}
-        {loading && (
-          <div className="flex justify-center">
-            <div className="animate-spin h-8 w-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Floating Mic Button */}
-      <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2">
-        <button
-          onClick={handleMicToggle}
-          disabled={isPlayingAudio || loading}
-          className={`relative w-20 h-20 rounded-full shadow-2xl transition-all duration-300 transform hover:scale-110 ${
-            recording
-              ? 'bg-red-600 animate-pulse'
-              : isPlayingAudio || loading
-              ? 'bg-gray-400 cursor-not-allowed'
-              : 'bg-indigo-600 hover:bg-indigo-700 animate-bounce'
-          }`}
-        >
-          {recording ? (
-            <div className="flex items-center justify-center">
-              <div className="w-4 h-4 bg-white rounded-sm"></div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-center text-white text-3xl">🎤</div>
+          
+          {/* Pulse effect rings for active states */}
+          {(isPlayingAudio || isRecording) && (
+            <>
+              <div className={`absolute inset-0 w-56 h-56 rounded-full ${
+                isPlayingAudio ? 'bg-blue-400' : 'bg-red-400'
+              } animate-ping opacity-20`}></div>
+              <div className={`absolute inset-2 w-52 h-52 rounded-full ${
+                isPlayingAudio ? 'bg-blue-400' : 'bg-red-400'
+              } animate-ping opacity-15 animation-delay-150`}></div>
+            </>
           )}
-          {recording && (
-            <div className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 rounded-full animate-ping"></div>
+          
+          {/* Recording indicator dot */}
+          {isRecording && (
+            <div className="absolute -top-4 -right-4 w-8 h-8 bg-red-500 rounded-full animate-ping shadow-lg">
+              <div className="w-full h-full bg-red-600 rounded-full animate-pulse"></div>
+            </div>
           )}
-        </button>
-        <div className="text-center mt-2 text-sm font-semibold text-gray-700">
-          {recording ? 'رکیں' : isPlayingAudio ? 'انتظار...' : 'بولیں'}
+        </div>
+
+        {/* Subtitle Display */}
+        {currentSubtitle && (
+          <div className="bg-white/90 backdrop-blur-lg rounded-2xl p-6 shadow-xl border border-gray-200 max-w-4xl mx-auto">
+            <div className="flex items-center justify-center space-x-3 mb-3">
+              <Volume2 className="h-5 w-5 text-blue-600 animate-pulse" />
+              <span className="text-sm font-semibold text-blue-600 uppercase tracking-wide">AI Question</span>
+            </div>
+            <p className="text-lg text-gray-800 text-center leading-relaxed font-medium">
+              {currentSubtitle}
+            </p>
+          </div>
+        )}
+
+        {/* User Response Display */}
+        {/* {userResponse && (
+          <div className="bg-gradient-to-r from-teal-50 to-emerald-50 rounded-2xl p-6 shadow-lg border border-teal-200 max-w-4xl mx-auto">
+            <div className="flex items-center justify-center space-x-3 mb-3">
+              <Mic className="h-5 w-5 text-teal-600" />
+              <span className="text-sm font-semibold text-teal-600 uppercase tracking-wide">Your Response</span>
+            </div>
+            <p className="text-lg text-gray-800 text-center leading-relaxed font-medium">
+              {userResponse}
+            </p>
+          </div>
+        )} */}
+
+        {/* Status */}
+        <div className="text-center max-w-2xl">
+          <p className="text-xl font-semibold text-gray-800 mb-6 leading-relaxed">{status}</p>
+          
+          {/* Controls */}
+          <div className="flex flex-col items-center space-y-6">
+            {!interviewStarted ? (
+              <Button
+                onClick={startInterview}
+                disabled={isProcessing}
+                className="bg-gradient-to-r from-teal-600 to-blue-600 hover:from-teal-700 hover:to-blue-700 text-white px-12 py-6 text-xl rounded-2xl shadow-xl transform transition-all duration-200 hover:scale-105 hover:shadow-2xl"
+              >
+                {isProcessing ? (
+                  <div className="flex items-center space-x-3">
+                    <Loader2 className="h-6 w-6 animate-spin" />
+                    <span>Starting Interview...</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center space-x-3">
+                    <MessageCircle className="h-6 w-6" />
+                    <span>Start Medical Interview</span>
+                  </div>
+                )}
+              </Button>
+            ) : !interviewComplete ? (
+              <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-6">
+                <Button
+                  onClick={startRecording}
+                  disabled={isRecording || isProcessing || isPlayingAudio}
+                  className={`px-8 py-4 text-lg rounded-xl transition-all duration-200 transform hover:scale-105 ${
+                    isPlayingAudio 
+                      ? 'bg-gray-400 cursor-not-allowed shadow-lg' 
+                      : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 shadow-xl hover:shadow-2xl'
+                  } text-white`}
+                >
+                  <div className="flex items-center space-x-3">
+                    <Mic className="h-5 w-5" />
+                    <span>{isPlayingAudio ? 'Wait for Question...' : 'Start Recording'}</span>
+                  </div>
+                </Button>
+                
+                <Button
+                  onClick={stopRecording}
+                  disabled={!isRecording || isProcessing}
+                  className="bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700 text-white px-8 py-4 text-lg rounded-xl shadow-xl hover:shadow-2xl transition-all duration-200 transform hover:scale-105"
+                >
+                  {isProcessing ? (
+                    <div className="flex items-center space-x-3">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      <span>Processing...</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center space-x-3">
+                      <div className="w-4 h-4 bg-white rounded-sm"></div>
+                      <span>Stop Recording</span>
+                    </div>
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <div className="text-center space-y-4">
+                <div className="text-green-600 text-2xl font-bold mb-6 flex items-center justify-center space-x-3">
+                  <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                    <span className="text-green-600 text-2xl">✅</span>
+                  </div>
+                  <span>Interview Complete!</span>
+                </div>
+                <Button
+                  onClick={() => router.push('/medical-histories')}
+                  className="bg-gradient-to-r from-teal-600 to-blue-600 hover:from-teal-700 hover:to-blue-700 text-white px-8 py-4 rounded-xl shadow-xl hover:shadow-2xl transition-all duration-200 transform hover:scale-105"
+                >
+                  <div className="flex items-center space-x-3">
+                    <MessageCircle className="h-5 w-5" />
+                    <span>View Medical Histories</span>
+                  </div>
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Enhanced Instructions */}
+        <div className="bg-white/70 backdrop-blur-lg rounded-2xl p-8 shadow-xl border border-gray-200 max-w-3xl mx-auto">
+          <div className="text-center mb-6">
+            <h3 className="text-2xl font-bold text-gray-800 mb-2">📋 How to Use</h3>
+            <p className="text-gray-600">Follow these simple steps for the best experience</p>
+          </div>
+          
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <div className="flex items-start space-x-4">
+                <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
+                  <Volume2 className="h-4 w-4 text-blue-600" />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-gray-800">Listen Carefully</h4>
+                  <p className="text-sm text-gray-600">Wait for each question to finish playing completely</p>
+                </div>
+              </div>
+              
+              <div className="flex items-start space-x-4">
+                <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+                  <Mic className="h-4 w-4 text-green-600" />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-gray-800">Record Response</h4>
+                  <p className="text-sm text-gray-600">Click "Start Recording" when ready to answer</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="flex items-start space-x-4">
+                <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0">
+                  <MessageCircle className="h-4 w-4 text-purple-600" />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-gray-800">Speak Clearly</h4>
+                  <p className="text-sm text-gray-600">Use Urdu or English, speak at normal pace</p>
+                </div>
+              </div>
+              
+              <div className="flex items-start space-x-4">
+                <div className="w-8 h-8 bg-red-100 rounded-full flex items-center justify-center flex-shrink-0">
+                  <div className="w-3 h-3 bg-red-600 rounded-sm"></div>
+                </div>
+                <div>
+                  <h4 className="font-semibold text-gray-800">Stop When Done</h4>
+                  <p className="text-sm text-gray-600">Click "Stop Recording" to send your response</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div className="mt-6 p-4 bg-gradient-to-r from-teal-50 to-blue-50 rounded-xl border border-teal-200">
+            <p className="text-center text-sm text-gray-700">
+              <span className="font-semibold">💡 Tip:</span> Your responses are automatically transcribed and saved. 
+              The interview will complete when all necessary medical information is collected.
+            </p>
+          </div>
         </div>
       </div>
     </div>
