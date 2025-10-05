@@ -18,7 +18,8 @@ import {
   Shield,
   Users,
   Calendar,
-  Activity
+  Activity,
+  Upload
 } from 'lucide-react'
 
 interface DashboardContentProps {
@@ -49,36 +50,44 @@ export default function DashboardContent({ user }: DashboardContentProps) {
     router.push('/medical-histories')
   }
 
+  const navigateToUpload = () => {
+    router.push('/dashboard/upload')
+  }
+
+  const navigateToDocuments = () => {
+    router.push('/documents')
+  }
+
   const stats = [
     {
-      title: 'Total Patients',
-      value: '1,234',
-      change: '+12%',
-      icon: Users,
+      title: 'AI History Taking',
+      value: 'Available',
+      change: 'Voice Enabled',
+      icon: Stethoscope,
       color: 'text-blue-600',
       bgColor: 'bg-blue-100',
     },
     {
-      title: 'Medical Records',
-      value: '5,678',
-      change: '+8%',
-      icon: FileText,
+      title: 'Document Upload',
+      value: 'Active',
+      change: 'Secure Storage',
+      icon: Upload,
       color: 'text-green-600',
       bgColor: 'bg-green-100',
     },
     {
-      title: 'This Month',
-      value: '234',
-      change: '+15%',
-      icon: Calendar,
+      title: 'Medical Histories',
+      value: 'Stored',
+      change: 'Bilingual',
+      icon: FileText,
       color: 'text-purple-600',
       bgColor: 'bg-purple-100',
     },
     {
-      title: 'Active Cases',
-      value: '89',
-      change: '+3%',
-      icon: Activity,
+      title: 'User Account',
+      value: 'Active',
+      change: 'Authenticated',
+      icon: Shield,
       color: 'text-orange-600',
       bgColor: 'bg-orange-100',
     },
@@ -87,31 +96,31 @@ export default function DashboardContent({ user }: DashboardContentProps) {
   const recentActivities = [
     {
       id: 1,
-      patient: 'احمد علی',
-      action: 'New medical record created',
-      time: '2 hours ago',
-      type: 'record',
+      patient: 'System',
+      action: 'AI Interview feature available',
+      time: 'Ready to use',
+      type: 'feature',
     },
     {
       id: 2,
-      patient: 'فاطمہ خان',
-      action: 'History updated',
-      time: '4 hours ago',
-      type: 'update',
+      patient: 'System',
+      action: 'Document upload system active',
+      time: 'Ready to use',
+      type: 'feature',
     },
     {
       id: 3,
-      patient: 'محمد حسن',
-      action: 'Appointment scheduled',
-      time: '6 hours ago',
-      type: 'appointment',
+      patient: 'System',
+      action: 'Medical history storage enabled',
+      time: 'Active',
+      type: 'feature',
     },
     {
       id: 4,
-      patient: 'عائشہ احمد',
-      action: 'Follow-up completed',
-      time: '1 day ago',
-      type: 'followup',
+      patient: 'User',
+      action: 'Account authenticated successfully',
+      time: 'Just now',
+      type: 'auth',
     },
   ]
 
@@ -200,29 +209,21 @@ export default function DashboardContent({ user }: DashboardContentProps) {
                 Quick Actions
               </h3>
               <div className="space-y-3">
-                <Button className="w-full justify-start" variant="outline">
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Patient Record
-                </Button>
-                <Button className="w-full justify-start" variant="outline">
-                  <FileText className="h-4 w-4 mr-2" />
-                  View All Records
-                </Button>
-                <Button className="w-full justify-start" variant="outline" onClick={navigateToMedicalHistories}>
-                  <FileText className="h-4 w-4 mr-2" />
-                  My Medical Histories
-                </Button>
-                <Button className="w-full justify-start" variant="outline">
-                  <Calendar className="h-4 w-4 mr-2" />
-                  Schedule Appointment
-                </Button>
-                <Button className="w-full justify-start" variant="outline" onClick={navigateToMedicalHistories}>
-                  <History className="h-4 w-4 mr-2" />
-                  Medical History
-                </Button>
                 <Button className="w-full justify-start" variant="outline" onClick={navigateToAI}>
                   <Stethoscope className="h-4 w-4 mr-2" />
                   Start AI Interview
+                </Button>
+                <Button className="w-full justify-start" variant="outline" onClick={navigateToUpload}>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Upload Medical Documents
+                </Button>
+                <Button className="w-full justify-start" variant="outline" onClick={navigateToDocuments}>
+                  <FileText className="h-4 w-4 mr-2" />
+                  View My Documents
+                </Button>
+                <Button className="w-full justify-start" variant="outline" onClick={navigateToMedicalHistories}>
+                  <History className="h-4 w-4 mr-2" />
+                  View Medical Histories
                 </Button>
               </div>
             </div>
@@ -232,23 +233,23 @@ export default function DashboardContent({ user }: DashboardContentProps) {
           <div className="lg:col-span-2">
             <div className="card p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                Recent Activity
+                System Status
               </h3>
               <div className="space-y-4">
                 {recentActivities.map((activity) => (
-                  <div key={activity.id} className="flex items-center space-x-4 p-3 bg-gray-50 rounded-lg">
-                    <div className="bg-primary-100 rounded-full p-2">
-                      <Stethoscope className="h-4 w-4 text-primary-600" />
+                  <div key={activity.id} className="flex items-center space-x-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    <div className="bg-primary-100 dark:bg-primary-800 rounded-full p-2">
+                      <Stethoscope className="h-4 w-4 text-primary-600 dark:text-primary-400" />
                     </div>
                     <div className="flex-1">
-                      <p className="text-sm font-medium text-gray-900">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white">
                         {activity.patient}
                       </p>
-                      <p className="text-sm text-gray-600">
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
                         {activity.action}
                       </p>
                     </div>
-                    <div className="text-sm text-gray-500">
+                    <div className="text-sm text-gray-500 dark:text-gray-400">
                       {activity.time}
                     </div>
                   </div>
@@ -260,43 +261,52 @@ export default function DashboardContent({ user }: DashboardContentProps) {
 
         {/* Features Section */}
         <div className="mt-12">
-          <h3 className="text-2xl font-bold text-gray-900 mb-6 text-center">
-            Key Features
+          <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-6 text-center">
+            Available Features
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="card p-6 text-center">
-              <div className="bg-primary-100 rounded-full p-4 w-16 h-16 mx-auto mb-4">
-                <Stethoscope className="h-8 w-8 text-primary-600" />
+              <div className="bg-primary-100 dark:bg-primary-900 rounded-full p-4 w-16 h-16 mx-auto mb-4">
+                <Stethoscope className="h-8 w-8 text-primary-600 dark:text-primary-400" />
               </div>
-              <h4 className="text-lg font-semibold text-gray-900 mb-2">
-                Automated History Taking
+              <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                AI Medical Interview
               </h4>
-              <p className="text-gray-600 font-urdu">
-                خودکار طبی تاریخ لینا
+              <p className="text-gray-600 dark:text-gray-300 font-urdu mb-2">
+                آواز کے ذریعے طبی تاریخ
+              </p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Voice-enabled Urdu medical history collection with real-time transcription
+              </p>
+            </div>
+
+            <div className="card p-6 text-center">
+              <div className="bg-green-100 dark:bg-green-900 rounded-full p-4 w-16 h-16 mx-auto mb-4">
+                <Upload className="h-8 w-8 text-green-600 dark:text-green-400" />
+              </div>
+              <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                Document Upload
+              </h4>
+              <p className="text-gray-600 dark:text-gray-300 font-urdu mb-2">
+                دستاویزات اپ لوڈ کریں
+              </p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Secure upload for medical documents, prescriptions, and reports
               </p>
             </div>
             
             <div className="card p-6 text-center">
-              <div className="bg-green-100 rounded-full p-4 w-16 h-16 mx-auto mb-4">
-                <Shield className="h-8 w-8 text-green-600" />
+              <div className="bg-purple-100 dark:bg-purple-900 rounded-full p-4 w-16 h-16 mx-auto mb-4">
+                <FileText className="h-8 w-8 text-purple-600 dark:text-purple-400" />
               </div>
-              <h4 className="text-lg font-semibold text-gray-900 mb-2">
-                Secure & Private
+              <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                Medical History Storage
               </h4>
-              <p className="text-gray-600 font-urdu">
-                محفوظ اور نجی
+              <p className="text-gray-600 dark:text-gray-300 font-urdu mb-2">
+                طبی تاریخ کا محفوظ ذخیرہ
               </p>
-            </div>
-            
-            <div className="card p-6 text-center">
-              <div className="bg-purple-100 rounded-full p-4 w-16 h-16 mx-auto mb-4">
-                <Users className="h-8 w-8 text-purple-600" />
-              </div>
-              <h4 className="text-lg font-semibold text-gray-900 mb-2">
-                Community Focused
-              </h4>
-              <p className="text-gray-600 font-urdu">
-                کمیونٹی پر مبنی
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Secure bilingual storage with automatic English translation
               </p>
             </div>
           </div>

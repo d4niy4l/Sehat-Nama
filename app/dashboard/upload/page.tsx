@@ -359,7 +359,7 @@ export default function UploadPage() {
                 ) : (
                   <>
                     <Upload className="w-5 h-5" />
-                    Upload & Analyze
+                    Upload
                   </>
                 )}
               </Button>
