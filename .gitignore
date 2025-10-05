@@ -4,3 +4,6 @@
 .env
 .env.*
 
+/python/__pycache__
+/python/.venv
+
