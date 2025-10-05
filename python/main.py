@@ -1,5 +1,3 @@
-
-
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
@@ -12,6 +10,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 import base64
 import requests
+import json
+from supabase import create_client, Client
 # Load environment variables from .env file
 load_dotenv()
 
@@ -41,6 +41,17 @@ client = Groq(api_key=GROQ_API_KEY)
 # Initialize UpliftAI configuration
 UPLIFTAI_API_KEY = os.getenv("UPLIFTAI_API_KEY")
 UPLIFTAI_BASE_URL = "https://api.upliftai.org/v1"
+
+# Initialize Supabase configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    print("Supabase client initialized successfully")
+else:
+    supabase = None
+    print("Supabase configuration not found - medical history storage disabled")
 
 print(f"UpliftAI API Key: {'Set' if UPLIFTAI_API_KEY else 'Not Set'}")
 # Supported audio formats
@@ -273,11 +284,94 @@ async def api_start_interview():
         return {'error': 'start-interview failed', 'details': str(e)}
 
 
+@app.post('/api/start-interview-with-voice')
+async def api_start_interview_with_voice():
+    """Start interview and return both text + audio for the first question"""
+    try:
+        # Start the interview to get the first question
+        result = llm_system.start_interview()
+        import uuid
+        session_id = str(uuid.uuid4())
+        llm_sessions[session_id] = result['state']
+
+        # Extract clean message
+        ai_message = result['ai_message']
+        if hasattr(ai_message, "choices"):
+            ai_message = ai_message.choices[0].message.content
+
+        # Convert the first question to speech using UpliftAI
+        if not UPLIFTAI_API_KEY:
+            return {
+                'session_id': session_id, 
+                'message': ai_message,
+                'audio_base64': None,
+                'tts_error': 'TTS not configured'
+            }
+
+        try:
+            # Call UpliftAI TTS for the first question
+            url = f"{UPLIFTAI_BASE_URL}/synthesis/text-to-speech"
+            headers = {
+                "Authorization": f"Bearer {UPLIFTAI_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "text": ai_message,
+                "voiceId": "v_meklc281",  # Default Urdu voice
+                "outputFormat": "MP3_22050_32"
+            }
+            
+            response = requests.post(url, json=payload, headers=headers)
+            
+            # Handle the audio response
+            content_type = response.headers.get("Content-Type", "")
+            
+            if "application/json" in content_type:
+                result_tts = response.json()
+                if "audioContent" in result_tts:
+                    audio_data = base64.b64decode(result_tts["audioContent"])
+                elif "url" in result_tts:
+                    audio_response = requests.get(result_tts["url"])
+                    audio_data = audio_response.content
+                else:
+                    raise Exception("Unexpected JSON response from TTS")
+            elif "audio" in content_type:
+                audio_data = response.content
+            else:
+                raise Exception(f"Unexpected response: {response.text}")
+            
+            # Return base64 encoded audio for frontend
+            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+            
+            return {
+                'session_id': session_id,
+                'message': ai_message,
+                'audio_base64': audio_base64,
+                'audio_format': 'mp3'
+            }
+            
+        except Exception as tts_error:
+            # Return text even if TTS fails
+            return {
+                'session_id': session_id,
+                'message': ai_message,
+                'audio_base64': None,
+                'tts_error': str(tts_error)
+            }
+        
+    except Exception as e:
+        return {'error': 'start-interview failed', 'details': str(e)}
+
+
 from pydantic import BaseModel
 
 class SendMessageRequest(BaseModel):
     session_id: str
     message: str
+
+class StoreMedicalHistoryRequest(BaseModel):
+    user_email: str
+    medical_data: dict
 
 @app.post('/api/send-message')
 async def api_send_message(req: SendMessageRequest):
@@ -309,6 +403,127 @@ async def api_send_message(req: SendMessageRequest):
         return {'error': 'send-message failed', 'details': str(e)}
 
 
+@app.post('/api/send-message-with-voice')
+async def api_send_message_with_voice(req: SendMessageRequest):
+    """Send message and return both text + audio response"""
+    try:
+        if req.session_id not in llm_sessions:
+            return {'error': 'session not found'}
+
+        state = llm_sessions[req.session_id]
+        result = llm_system.process_user_message(state, req.message)
+        llm_sessions[req.session_id] = result['state']
+        
+        # Extract AI message
+        ai_message = result['ai_message']
+        if hasattr(ai_message, "choices") and ai_message.choices:
+            ai_message = ai_message.choices[0].message.content
+        elif hasattr(ai_message, "content"):
+            ai_message = ai_message.content
+        else:
+            ai_message = str(ai_message)
+
+        # Convert response to speech
+        audio_base64 = None
+        tts_error = None
+        
+        if UPLIFTAI_API_KEY and ai_message:
+            try:
+                url = f"{UPLIFTAI_BASE_URL}/synthesis/text-to-speech"
+                headers = {
+                    "Authorization": f"Bearer {UPLIFTAI_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "text": ai_message,
+                    "voiceId": "v_meklc281",
+                    "outputFormat": "MP3_22050_32"
+                }
+                
+                response = requests.post(url, json=payload, headers=headers)
+                content_type = response.headers.get("Content-Type", "")
+                
+                if "application/json" in content_type:
+                    result_tts = response.json()
+                    if "audioContent" in result_tts:
+                        audio_data = base64.b64decode(result_tts["audioContent"])
+                    elif "url" in result_tts:
+                        audio_response = requests.get(result_tts["url"])
+                        audio_data = audio_response.content
+                    else:
+                        raise Exception("Unexpected JSON response")
+                elif "audio" in content_type:
+                    audio_data = response.content
+                else:
+                    raise Exception(f"Unexpected response: {response.text}")
+                
+                audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+                
+            except Exception as e:
+                tts_error = str(e)
+
+        return {
+            'message': ai_message,
+            'collected_data': result['collected_data'],
+            'is_complete': result['is_complete'],
+            'audio_base64': audio_base64,
+            'audio_format': 'mp3',
+            'tts_error': tts_error
+        }
+        
+    except Exception as e:
+        return {'error': 'send-message failed', 'details': str(e)}
+
+
+@app.post('/api/text-to-audio')
+async def api_text_to_audio(
+    text: str = Form(...),
+    voice_id: str = Form(default="v_meklc281")
+):
+    """Convert text to audio and return base64 encoded"""
+    if not UPLIFTAI_API_KEY:
+        raise HTTPException(status_code=500, detail="TTS not configured")
+    
+    try:
+        url = f"{UPLIFTAI_BASE_URL}/synthesis/text-to-speech"
+        headers = {
+            "Authorization": f"Bearer {UPLIFTAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "text": text,
+            "voiceId": voice_id,
+            "outputFormat": "MP3_22050_32"
+        }
+        
+        response = requests.post(url, json=payload, headers=headers)
+        content_type = response.headers.get("Content-Type", "")
+        
+        if "application/json" in content_type:
+            result = response.json()
+            if "audioContent" in result:
+                audio_data = base64.b64decode(result["audioContent"])
+            elif "url" in result:
+                audio_response = requests.get(result["url"])
+                audio_data = audio_response.content
+            else:
+                raise HTTPException(status_code=500, detail="Unexpected response format")
+        elif "audio" in content_type:
+            audio_data = response.content
+        else:
+            raise HTTPException(status_code=500, detail=f"Unexpected response: {response.text}")
+        
+        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+        
+        return {
+            'audio_base64': audio_base64,
+            'audio_format': 'mp3',
+            'text': text
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTS failed: {str(e)}")
+
 
 @app.get('/api/get-history')
 async def api_get_history(session_id: str, view: str = 'patient'):
@@ -324,6 +539,162 @@ async def api_get_history(session_id: str, view: str = 'patient'):
         return { 'error': 'failed to build history', 'details': str(e) }
 
     return { 'session_id': session_id, 'view': view, 'history': history }
+
+
+@app.post('/api/store-medical-history')
+async def api_store_medical_history(req: StoreMedicalHistoryRequest):
+    """
+    Store medical interview results in Supabase after translation
+    Takes Urdu medical data, translates to English, and stores both versions
+    """
+    if not supabase:
+        raise HTTPException(
+            status_code=500, 
+            detail="Supabase not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY environment variables."
+        )
+    
+    if not GROQ_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="GROQ_API_KEY not configured for translation"
+        )
+    
+    try:
+        # Prepare the original Urdu data
+        urdu_version = req.medical_data
+        
+        # Translate each field to English using Groq
+        english_version = {}
+        
+        # Iterate through each section and field in the medical data
+        for section, section_data in urdu_version.items():
+            if isinstance(section_data, dict):
+                english_version[section] = {}
+                for field, urdu_value in section_data.items():
+                    if isinstance(urdu_value, str) and urdu_value.strip():
+                        # Translate this Urdu text to English
+                        english_value = await translate_urdu_to_english(urdu_value)
+                        english_version[section][field] = english_value
+                    else:
+                        # Non-string or empty values remain as-is
+                        english_version[section][field] = urdu_value
+            else:
+                # Non-dict values remain as-is
+                english_version[section] = section_data
+        
+        # Store both versions in Supabase
+        result = supabase.table('medical_history').insert({
+            'email': req.user_email,
+            'urdu_version': urdu_version,
+            'english_version': english_version
+        }).execute()
+        
+        if result.data:
+            return {
+                'success': True,
+                'message': 'Medical history stored successfully',
+                'record_id': result.data[0]['id'],
+                'urdu_version': urdu_version,
+                'english_version': english_version
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to store medical history in database"
+            )
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to store medical history: {str(e)}"
+        )
+
+
+async def translate_urdu_to_english(urdu_text: str) -> str:
+    """
+    Translate Urdu text to English using Groq LLM
+    """
+    try:
+        translation_prompt = f"""
+Translate the following Urdu text to English. Provide only the direct translation without any additional commentary or explanation.
+
+Urdu Text: {urdu_text}
+
+English Translation:"""
+
+        # Use Groq for translation
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": translation_prompt
+                }
+            ],
+            model="llama-3.1-8b-instant",  # Fast model for translation
+            temperature=0.1,  # Low temperature for consistent translation
+            max_tokens=512
+        )
+        
+        english_translation = chat_completion.choices[0].message.content.strip()
+        
+        # Clean up the response (remove any prefix like "English Translation:" if present)
+        if english_translation.startswith("English Translation:"):
+            english_translation = english_translation.replace("English Translation:", "").strip()
+        
+        return english_translation
+        
+    except Exception as e:
+        # If translation fails, return the original text with error note
+        return f"[Translation Error: {str(e)}] {urdu_text}"
+
+
+@app.get('/api/example-store-usage')
+async def api_example_store_usage():
+    """
+    Example showing how to use the store-medical-history endpoint
+    This shows the expected format of medical_data when interview is complete
+    """
+    example_medical_data = {
+        "demographics": {
+            "name": "احمد علی",
+            "age": "پچیس سال",
+            "gender": "مرد",
+            "occupation": "انجینئر",
+            "address": "کراچی، پاکستان",
+            "contact": "03001234567"
+        },
+        "complaint": {
+            "chief_complaint": "پیٹ میں درد ہو رہا ہے دو دنوں سے"
+        },
+        "hpc": {
+            "pain_description": "درد تیز ہے اور کھانے کے بعد بڑھ جاتا ہے"
+        },
+        "systems": {
+            "cardiovascular": "کوئی مسئلہ نہیں",
+            "respiratory": "سانس لینے میں کوئی دشواری نہیں"
+        },
+        "pmh": {
+            "previous_illnesses": "پہلے کبھی کوئی بیماری نہیں ہوئی"
+        },
+        "drugs": {
+            "current_medications": "کوئی دوا نہیں لے رہا"
+        },
+        "social": {
+            "smoking": "سگریٹ نہیں پیتا",
+            "alcohol": "شراب نہیں پیتا"
+        }
+    }
+    
+    return {
+        "message": "Example usage of store-medical-history endpoint",
+        "endpoint": "/api/store-medical-history",
+        "method": "POST",
+        "request_body": {
+            "user_email": "patient@example.com",
+            "medical_data": example_medical_data
+        },
+        "note": "Call this endpoint when interview is complete (is_complete=true) with the collected_data from the session"
+    }
 
 app.mount("/static", StaticFiles(directory="."), name="static")
 
