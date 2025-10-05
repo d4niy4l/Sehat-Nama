@@ -44,7 +44,7 @@ export default function AIConversationPage() {
   const currentAudioRef = useRef<HTMLAudioElement | null>(null)
   
   // API base URL
-  const apiBase = 'http://localhost:8000'
+  const apiBase = 'https://sehatnamafastapi.onrender.com'
 
   // Redirect if not authenticated
   useEffect(() => {
