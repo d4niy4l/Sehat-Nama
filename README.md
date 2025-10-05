@@ -180,3 +180,47 @@ For support, email your-email@example.com or create an issue in the repository.
 ---
 
 **Sehat Nama** - Making healthcare accessible through technology 🏥💚
+
+## AI integration (Python backend)
+
+This repo includes a Python FastAPI backend in the `python/` folder which runs the LLM-based interview engine.
+
+Endpoints provided by the Python backend (default port 8000):
+
+- POST /api/start-interview  -> returns { session_id, message }
+- POST /api/send-message     -> body { session_id, message } -> responds with AI reply and collected_data
+
+The Next.js app includes proxy routes under `app/api/ai-proxy/*` which forward requests to the Python server. By default they point at `http://localhost:8000`.
+
+Environment variables useful for integration:
+- PYTHON_API_BASE: base URL of the Python backend (optional, default http://localhost:8000)
+- NEXT_PUBLIC_API_BASE: base prefix for Next.js API (usually empty)
+
+How to run the Python backend locally:
+
+1. cd python
+2. Install dependencies (see python/requirements.txt)
+3. Set GROQ_API_KEY in your environment if required by llm
+4. uvicorn main:app --reload --port 8000
+
+Visit the frontend page at /ai-conversation to start an interview. The frontend will initiate the conversation (AI starter message) automatically, anonymize user messages with a placeholder name, and allow export of the final conversation as a PDF.
+
+Voice usage
+-----------
+
+This project supports a voice-driven flow:
+
+- The AI sends an initial greeting (text and optionally audio) when the page loads.
+- Click "Record" on the AI Conversation page to start capturing audio from your microphone.
+- Click "Stop & Send" to upload the recorded audio. The Python backend will transcribe the audio and return text.
+- The transcription will be forwarded to the LLM engine, which replies with text. The frontend will also request TTS from the backend and play audio reply.
+
+Notes:
+- The Python backend exposes `/transcribe` and `/text-to-speech` endpoints used by the frontend via the `/api/ai-proxy/*` proxy routes.
+- Make sure your browser allows microphone access. MediaRecorder is used (modern browsers only).
+ 
+Health & format notes
+---------------------
+- The frontend periodically pings `/api/ai-proxy/health` to check whether the Python backend is reachable and the conversation UI shows a simple status indicator.
+- Recorded audio is captured as WebM in the browser and the frontend attempts an in-browser conversion to 16kHz 16-bit WAV (mono) before uploading. This improves compatibility with some transcription backends. If conversion fails the raw webm is uploaded instead.
+

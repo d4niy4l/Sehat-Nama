@@ -41,6 +41,10 @@ export default function DashboardContent({ user }: DashboardContentProps) {
     }
   }
 
+  const navigateToAI = () => {
+    router.push('/ai-conversation')
+  }
+
   const stats = [
     {
       title: 'Total Patients',
@@ -207,6 +211,10 @@ export default function DashboardContent({ user }: DashboardContentProps) {
                 <Button className="w-full justify-start" variant="outline">
                   <History className="h-4 w-4 mr-2" />
                   Medical History
+                </Button>
+                <Button className="w-full justify-start" variant="outline" onClick={navigateToAI}>
+                  <Stethoscope className="h-4 w-4 mr-2" />
+                  Start AI Interview
                 </Button>
               </div>
             </div>

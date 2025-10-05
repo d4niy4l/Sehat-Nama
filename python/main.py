@@ -1,4 +1,6 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+
+
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -73,7 +75,7 @@ async def transcribe_urdu_audio(
     )
 ):
     
-    
+    print(f"Transcribing file: {file.filename}, size: {file.size}, model: {model}")
     # Validate file format
     file_ext = Path(file.filename).suffix.lower().lstrip('.')
     if file_ext not in SUPPORTED_FORMATS:
@@ -541,6 +543,51 @@ async def api_get_history(session_id: str, view: str = 'patient'):
     return { 'session_id': session_id, 'view': view, 'history': history }
 
 
+@app.websocket("/ws/interview/{session_id}")
+async def websocket_interview(websocket: WebSocket, session_id: str):
+    """WebSocket for streaming responses (exposes same behavior as llm.py websocket)
+    """
+    await websocket.accept()
+
+    # Initialize or get session
+    if session_id not in llm_sessions:
+        result = llm_system.start_interview()
+        llm_sessions[session_id] = result['state']
+        await websocket.send_json({
+            "type": "message",
+            "content": result['ai_message']
+        })
+
+    state = llm_sessions[session_id]
+
+    while True:
+        try:
+            data = await websocket.receive_json()
+        except Exception:
+            break
+        user_message = data.get('message')
+
+        # Stream response tokens
+        collected_text = ""
+        try:
+            async for chunk in llm_system.process_user_message_streaming(state, user_message):
+                if isinstance(chunk, dict) and 'content' in chunk:
+                    token = chunk['content']
+                    collected_text += token
+                    await websocket.send_json({"type": "token", "content": token})
+        except Exception as e:
+            # send an error and continue
+            await websocket.send_json({"type": "error", "message": str(e)})
+
+        # Send completion
+        await websocket.send_json({
+            "type": "complete",
+            "collected_data": state.get('collected_data', {}),
+            "is_complete": state.get('all_sections_done', False)
+        })
+
+        # Update session
+        llm_sessions[session_id] = state
 @app.post('/api/store-medical-history')
 async def api_store_medical_history(req: StoreMedicalHistoryRequest):
     """
