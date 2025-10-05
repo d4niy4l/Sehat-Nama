@@ -9,27 +9,51 @@ export async function POST(request: Request) {
   try {
     const url = `${PYTHON_BASE}/transcribe`
 
-    // Read incoming body as ArrayBuffer and forward with original content-type
-    const contentType = request.headers.get('content-type') || ''
-    const arrayBuf = await request.arrayBuffer()
-    const buffer = Buffer.from(arrayBuf)
+    // Parse the incoming FormData from the frontend
+    const formData = await request.formData()
+    const file = formData.get('file') as File
+    const model = formData.get('model') as string || 'whisper-large-v3'
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': contentType },
-      body: buffer,
-    })
-
-    const resCt = res.headers.get('content-type') || ''
-    if (resCt.includes('application/json')) {
-      const json = await res.json()
-      return NextResponse.json(json)
+    if (!file) {
+      return NextResponse.json(
+        { error: 'No file provided' }, 
+        { status: 400 }
+      )
     }
 
-    const text = await res.text()
-    return NextResponse.json({ text })
+    console.log(`STT Proxy: Received file ${file.name}, size: ${file.size}, type: ${file.type}`)
+
+    // Create new FormData for Python backend
+    const pythonFormData = new FormData()
+    pythonFormData.append('file', file)
+    pythonFormData.append('model', model)
+
+    // Forward to Python backend
+    const res = await fetch(url, {
+      method: 'POST',
+      body: pythonFormData,
+    })
+
+    console.log(`STT Proxy: Python backend responded with status ${res.status}`)
+
+    if (!res.ok) {
+      const errorText = await res.text()
+      console.error('STT Proxy: Python backend error:', errorText)
+      return NextResponse.json(
+        { error: 'Python backend transcription failed', details: errorText },
+        { status: res.status }
+      )
+    }
+
+    const json = await res.json()
+    console.log('STT Proxy: Success, transcription length:', json.text?.length || 0)
+    
+    return NextResponse.json(json)
   } catch (err: any) {
-    console.error('ai-proxy transcribe error', err, err?.stack)
-    return NextResponse.json({ error: 'proxy transcribe failed', details: String(err) }, { status: 500 })
+    console.error('STT Proxy error:', err, err?.stack)
+    return NextResponse.json(
+      { error: 'proxy transcribe failed', details: String(err) }, 
+      { status: 500 }
+    )
   }
 }

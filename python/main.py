@@ -413,9 +413,12 @@ async def api_send_message_with_voice(req: SendMessageRequest):
             return {'error': 'session not found'}
 
         state = llm_sessions[req.session_id]
+        print(f"State before processing: {state.get('current_section')}")
         result = llm_system.process_user_message(state, req.message)
         llm_sessions[req.session_id] = result['state']
-        
+        print(f"Result keys: {result.keys()}")
+        print(f"AI message raw: {result.get('ai_message')}")
+        print(f"AI message type: {type(result.get('ai_message'))}")
         # Extract AI message
         ai_message = result['ai_message']
         if hasattr(ai_message, "choices") and ai_message.choices:
