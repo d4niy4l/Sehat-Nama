@@ -45,6 +45,10 @@ export default function DashboardContent({ user }: DashboardContentProps) {
     router.push('/ai-conversation')
   }
 
+  const navigateToMedicalHistories = () => {
+    router.push('/medical-histories')
+  }
+
   const stats = [
     {
       title: 'Total Patients',
@@ -204,11 +208,15 @@ export default function DashboardContent({ user }: DashboardContentProps) {
                   <FileText className="h-4 w-4 mr-2" />
                   View All Records
                 </Button>
+                <Button className="w-full justify-start" variant="outline" onClick={navigateToMedicalHistories}>
+                  <FileText className="h-4 w-4 mr-2" />
+                  My Medical Histories
+                </Button>
                 <Button className="w-full justify-start" variant="outline">
                   <Calendar className="h-4 w-4 mr-2" />
                   Schedule Appointment
                 </Button>
-                <Button className="w-full justify-start" variant="outline">
+                <Button className="w-full justify-start" variant="outline" onClick={navigateToMedicalHistories}>
                   <History className="h-4 w-4 mr-2" />
                   Medical History
                 </Button>

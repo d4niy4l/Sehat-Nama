@@ -743,6 +743,99 @@ async def api_example_store_usage():
         "note": "Call this endpoint when interview is complete (is_complete=true) with the collected_data from the session"
     }
 
+@app.get('/api/get-all-histories')
+async def api_get_all_histories(email: str):
+    """
+    Get all medical histories for a specific email address
+    Returns a list of all medical history records with metadata
+    
+    Query Parameters:
+    - email: The email address to fetch histories for
+    """
+    if not supabase:
+        raise HTTPException(
+            status_code=500, 
+            detail="Supabase not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY environment variables."
+        )
+    
+    try:
+        # Get all medical history records for this email
+        print(email)
+        result = supabase.table('medical_history').select("*").eq('email', email).order('created_at', desc=True).execute()
+        print(result)
+        histories = []
+        for record in result.data:
+            # Create a summary of each record
+            urdu_data = record['urdu_version']
+            english_data = record['english_version']
+            
+            # Calculate completion stats
+            total_sections = len(urdu_data) if isinstance(urdu_data, dict) else 0
+            total_fields = 0
+            if isinstance(urdu_data, dict):
+                for section_data in urdu_data.values():
+                    if isinstance(section_data, dict):
+                        total_fields += len([v for v in section_data.values() if v and str(v).strip()])
+            
+            # Get chief complaint for preview
+            chief_complaint = ""
+            if isinstance(urdu_data, dict):
+                for section_key, section_data in urdu_data.items():
+                    if isinstance(section_data, dict):
+                        for field_key, field_value in section_data.items():
+                            if 'complaint' in field_key.lower() or 'chief' in field_key.lower():
+                                chief_complaint = str(field_value)[:100] + "..." if len(str(field_value)) > 100 else str(field_value)
+                                break
+                    if chief_complaint:
+                        break
+            
+            # Determine primary language based on content
+            primary_language = "urdu"
+            if isinstance(urdu_data, dict):
+                sample_text = ""
+                for section_data in urdu_data.values():
+                    if isinstance(section_data, dict):
+                        for value in section_data.values():
+                            if isinstance(value, str) and value.strip():
+                                sample_text = value
+                                break
+                        if sample_text:
+                            break
+                
+                # Simple heuristic: if contains English alphabet more than Urdu, consider it English
+                english_chars = sum(1 for c in sample_text if c.isalpha() and ord(c) < 128)
+                total_chars = len([c for c in sample_text if c.isalpha()])
+                if total_chars > 0 and english_chars / total_chars > 0.7:
+                    primary_language = "english"
+            
+            histories.append({
+                'id': record['id'],
+                'created_at': record['created_at'],
+                'primary_language': primary_language,
+                'chief_complaint_preview': chief_complaint,
+                'stats': {
+                    'total_sections': total_sections,
+                    'total_fields': total_fields,
+                    'completion_status': 'Complete' if total_sections >= 5 else 'Partial'
+                },
+                'urdu_version': urdu_data,
+                'english_version': english_data
+            })
+        
+        return {
+            'email': email,
+            'total_records': len(histories),
+            'histories': histories
+        }
+        
+    except Exception as e:
+        print(e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve medical histories: {str(e)}"
+        )
+
+
 app.mount("/static", StaticFiles(directory="."), name="static")
 
 @app.get("/index")
