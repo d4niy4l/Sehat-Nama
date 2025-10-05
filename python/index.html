@@ -49,9 +49,10 @@
 </head>
 <body>
     <div id="controls">
-        <button id="startBtn">Start Recording</button>
-        <button id="stopBtn" disabled>Stop Recording</button>
-        <div id="status">Press "Start Recording" to begin</div>
+        <button id="startInterviewBtn">Start Medical Interview</button>
+        <button id="startBtn" style="display: none;">Start Recording</button>
+        <button id="stopBtn" disabled style="display: none;">Stop Recording</button>
+        <div id="status">Click "Start Medical Interview" to begin</div>
     </div>
     <div id="history"></div>
 
@@ -61,6 +62,7 @@
         let recorder = null;
         let audio = null;
 
+        const startInterviewBtn = document.getElementById('startInterviewBtn');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
         const statusDiv = document.getElementById('status');
@@ -68,15 +70,31 @@
 
         async function startInterview() {
             statusDiv.textContent = 'Starting interview...';
+            startInterviewBtn.disabled = true;
+            
             try {
-                const res = await fetch(`${apiBase}/api/start-interview`, { method: 'POST' });
+                const res = await fetch(`${apiBase}/api/start-interview-with-voice`, { method: 'POST' });
                 const data = await res.json();
                 if (data.error) throw new Error(data.details);
                 sessionId = data.session_id;
-                await ttsAndPlay(data.message);
+                
+                // Show recording controls
+                startInterviewBtn.style.display = 'none';
+                startBtn.style.display = 'inline-block';
+                stopBtn.style.display = 'inline-block';
+                
+                // Play the initial question audio
+                if (data.audio_base64) {
+                    statusDiv.textContent = 'Playing question...';
+                    await playAudioFromBase64(data.audio_base64);
+                } else {
+                    // Fallback to TTS if no audio
+                    statusDiv.textContent = 'Playing question...';
+                    await ttsAndPlay(data.message);
+                }
             } catch (e) {
                 statusDiv.textContent = `Error starting interview: ${e.message}`;
-                startBtn.disabled = false;
+                startInterviewBtn.disabled = false;
             }
         }
 
@@ -121,7 +139,7 @@
                 const trans = await transRes.json();
                 if (trans.error) throw new Error(trans.error);
 
-                const sendRes = await fetch(`${apiBase}/api/send-message`, {
+                const sendRes = await fetch(`${apiBase}/api/send-message-with-voice`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ session_id: sessionId, message: trans.text })
@@ -132,10 +150,18 @@
                 if (resp.is_complete) {
                     statusDiv.textContent = 'Interview complete!';
                     startBtn.disabled = true;
-                    await saveHistory();
+                    await saveHistory(resp.collected_data);
                 } else {
-                    console.log(resp.message)
-                    await ttsAndPlay(resp.message);
+                    console.log(resp.message);
+                    
+                    // Play audio response if available
+                    if (resp.audio_base64) {
+                        await playAudioFromBase64(resp.audio_base64);
+                    } else {
+                        // Fallback to TTS
+                        await ttsAndPlay(resp.message);
+                    }
+                    
                     startBtn.disabled = false;
                     statusDiv.textContent = 'Playing AI response... Record next when done';
                 }
@@ -143,6 +169,47 @@
                 statusDiv.textContent = `Error: ${e.message}`;
                 startBtn.disabled = false;
             }
+        }
+
+        async function playAudioFromBase64(audioBase64) {
+            return new Promise((resolve, reject) => {
+                try {
+                    const audioBlob = new Blob([
+                        Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0))
+                    ], { type: 'audio/mp3' });
+                    
+                    const url = URL.createObjectURL(audioBlob);
+                    audio = new Audio(url);
+                    
+                    audio.onended = () => {
+                        statusDiv.textContent = 'Question finished. Click "Start Recording" to respond.';
+                        startBtn.disabled = false;
+                        URL.revokeObjectURL(url);
+                        resolve();
+                    };
+                    
+                    audio.onerror = (e) => {
+                        console.error('Audio playback error:', e);
+                        statusDiv.textContent = 'Audio playback failed. Click "Start Recording" to respond.';
+                        startBtn.disabled = false;
+                        URL.revokeObjectURL(url);
+                        reject(e);
+                    };
+                    
+                    // This should work now since it's triggered by user interaction
+                    audio.play().catch(e => {
+                        console.error('Audio play failed:', e);
+                        statusDiv.textContent = 'Audio play failed. Click "Start Recording" to respond.';
+                        startBtn.disabled = false;
+                        reject(e);
+                    });
+                } catch (e) {
+                    console.error('Error creating audio from base64:', e);
+                    statusDiv.textContent = 'Audio error. Click "Start Recording" to respond.';
+                    startBtn.disabled = false;
+                    reject(e);
+                }
+            });
         }
 
         async function ttsAndPlay(text) {
@@ -161,31 +228,68 @@
             const audioBlob = await ttsRes.blob();
             const url = URL.createObjectURL(audioBlob);
             audio = new Audio(url);
-            audio.play();
+            
             audio.onended = () => {
-                statusDiv.textContent = 'Ready to record next response';
+                statusDiv.textContent = 'Question finished. Click "Start Recording" to respond.';
                 startBtn.disabled = false;
+                URL.revokeObjectURL(url);
             };
+            
+            audio.onerror = (e) => {
+                console.error('TTS Audio playback error:', e);
+                statusDiv.textContent = 'Audio playback failed. Click "Start Recording" to respond.';
+                startBtn.disabled = false;
+                URL.revokeObjectURL(url);
+            };
+            
+            await audio.play().catch(e => {
+                console.error('TTS Audio play failed:', e);
+                statusDiv.textContent = 'Audio play failed. Click "Start Recording" to respond.';
+                startBtn.disabled = false;
+            });
         }
 
-        async function saveHistory() {
+        async function saveHistory(collectedData) {
             try {
-                const res = await fetch(`${apiBase}/api/get-history?session_id=${sessionId}&view=patient`);
-                const data = await res.json();
-                if (data.error) throw new Error(data.error);
-                // History saved on server (llm_sessions); optionally display for debug
-                // historyDiv.textContent = JSON.stringify(data.history, null, 2);
-                console.log('History saved:', data.history);
+                // Get the formatted history for display
+                const historyRes = await fetch(`${apiBase}/api/get-history?session_id=${sessionId}&view=patient`);
+                const historyData = await historyRes.json();
+                if (historyData.error) throw new Error(historyData.error);
+                
+                console.log('History retrieved:', historyData.history);
+                
+                // Store the medical data in Supabase
+                const userEmail = "thirstycheems@gmail.com";
+                
+                const storeRes = await fetch(`${apiBase}/api/store-medical-history`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_email: userEmail,
+                        medical_data: collectedData
+                    })
+                });
+                
+                const storeData = await storeRes.json();
+                
+                if (storeData.success) {
+                    console.log('Medical history stored successfully:', storeData);
+                    statusDiv.textContent = 'Interview complete! Medical history saved to database.';
+                } else {
+                    throw new Error(storeData.detail || 'Failed to store medical history');
+                }
+                
             } catch (e) {
                 console.error('Failed to save history:', e);
+                statusDiv.textContent = `Interview complete, but failed to save: ${e.message}`;
             }
         }
 
+        startInterviewBtn.addEventListener('click', startInterview);
         startBtn.addEventListener('click', startRecording);
         stopBtn.addEventListener('click', stopRecording);
 
-        // Start interview on page load
-        startInterview();
+        // Don't auto-start interview - wait for user click
     </script>
 </body>
 </html>
