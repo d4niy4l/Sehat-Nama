@@ -6,10 +6,7 @@ Shows how LangGraph structure + Urdu configuration work together
 from typing import TypedDict, List, Annotated
 from langgraph.graph import StateGraph, END
 import os
-try:
-    from groq import Groq
-except Exception:
-    Groq = None
+from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from pydantic import BaseModel, Field
 import json
@@ -41,6 +38,7 @@ CRITICAL LANGUAGE RULES:
 3. **Mix common English medical terms** naturally (blood pressure, diabetes, X-ray)
 4. **Use respectful آپ (aap) form**
 5. **Accept mixed language** - mirror patient's style
+6. **Dont make a diagnosis or give suggestions, Only ask about the patient history**
 
 CURRENT SECTION: {current_section}
 COLLECTED DATA SO FAR: {collected_data}
@@ -50,20 +48,95 @@ COLLECTED DATA SO FAR: {collected_data}
 Continue the interview naturally in Urdu."""
 
     SECTION_PROMPTS = {
-        "demographics": """
-اب میں آپ سے کچھ بنیادی معلومات لوں گا۔
-Ask: نام، عمر، جنس، پیشہ
+        "patient_name": """
+**CURRENT TASK: Get patient's full name**
+
+INSTRUCTIONS:
+- If data NOT recorded and FIRST interaction: Ask "آپ کا پورا نام کیا ہے؟" (What is your full name?)
+- If data NOT recorded and user gave UNCLEAR response: Ask again "معاف کریں، براہ کرم اپنا صحیح نام بتائیں؟"
+- If data NOT recorded and user gave CLEAR name: Use RecordInfo tool, then MarkSectionComplete
+- If data ALREADY recorded: Use MarkSectionComplete to move forward
+
+VALIDATION RULES:
+- CLEAR: "احمد علی", "فاطمہ خان", "Muhammad Ali" 
+- UNCLEAR: "موسیقی", "abc", "123", single letters, gibberish
+
+**IMPORTANT: Only ask for name if not already recorded.**
+""",
+        "patient_age": """
+**CURRENT TASK: Get patient's age**
+
+INSTRUCTIONS:
+- Ask "آپ کی عمر کتنی ہے؟" (What is your age?)
+- If unclear: "براہ کرم اپنی عمر سالوں میں بتائیں؟"
+- If clear: Record and mark complete
+
+VALIDATION:
+- CLEAR: "25", "پچیس سال", "25 years", "تیس"
+- UNCLEAR: random words, non-age responses
+
+**Only ask for age. One question at a time.**
+""",
+        "patient_gender": """
+**CURRENT TASK: Get patient's gender**
+
+INSTRUCTIONS:
+- Ask "آپ مرد ہیں یا خاتون؟" (Are you male or female?)
+- If unclear: Ask again politely
+- If clear: Record and mark complete
+
+VALIDATION:
+- CLEAR: "مرد", "خاتون", "male", "female", "man", "woman"
+- UNCLEAR: unrelated responses
+
+**Only ask for gender.**
+""",
+        "patient_occupation": """
+**CURRENT TASK: Get patient's occupation**
+
+INSTRUCTIONS:
+- Ask "آپ کیا کام کرتے ہیں؟" (What work do you do?)
+- Accept: jobs, "student", "گھریلو خاتون", "ریٹائرڈ"
+- If unclear: Ask again
+
+**Only ask for occupation.**
+""",
+        "patient_address": """
+**CURRENT TASK: Get patient's address**
+
+INSTRUCTIONS:
+- Ask "آپ کہاں رہتے ہیں؟ شہر یا علاقہ بتائیں؟"
+- Accept: city names, areas, districts
+- If unclear: Ask again
+
+**Only ask for address/location.**
+""",
+        "patient_contact": """
+**CURRENT TASK: Get patient's contact number**
+
+INSTRUCTIONS:
+- Ask "آپ کا فون نمبر کیا ہے؟"
+- Accept: phone numbers (any format)
+- If unclear: Ask again
+
+**Only ask for contact number.**
 """,
         "complaint": """
-آپ کو کیا تکلیف ہے؟ کب سے؟
+**CURRENT TASK: Get chief complaint**
+
+INSTRUCTIONS:
+- If data NOT recorded: Ask "آپ کو کیا تکلیف ہے؟ کیا مسئلہ ہے؟"
+- If data ALREADY recorded: Use MarkSectionComplete to move forward
+- Listen for main health problem
+- If unclear: Ask them to describe their main problem
+
+**Only ask for main complaint if not already recorded.**
 """,
         "hpc_pain": """
-Use SOCRATES in Urdu:
+Based on complaint, ask relevant SOCRATES questions in Urdu:
 - کہاں درد ہے؟ (Site)
-- کب شروع ہوا؟ (Onset)
+- کب شروع ہوا؟ (Onset)  
 - کیسا درد ہے؟ (Character)
-- کہیں اور جاتا ہے؟ (Radiation)
-...
 """,
         "systems": """
 Relevant system review in Urdu based on complaint
@@ -80,15 +153,83 @@ Relevant system review in Urdu based on complaint
     }
     
     @staticmethod
-    def build_prompt(section: str, collected_data: dict) -> str:
-        """Build section-specific Urdu prompt"""
+    def build_prompt(section: str, collected_data: dict, last_user_response: str = None) -> str:
+        """Build section-specific Urdu prompt with validation"""
         section_prompt = UrduPromptBuilder.SECTION_PROMPTS.get(section, "")
         
-        return UrduPromptBuilder.URDU_BASE_PROMPT.format(
-            current_section=section,
-            collected_data=json.dumps(collected_data, ensure_ascii=False, indent=2),
-            section_specific_prompt=section_prompt
-        )
+        base_prompt = f"""You are a medical history-taking assistant conducting interviews in URDU (اردو).
+
+**LANGUAGE RULES:**
+1. Always respond in Urdu script (اردو رسم الخط)
+2. Use simple, conversational Urdu
+3. Use respectful آپ (aap) form
+4. Mix common English medical terms naturally
+
+**CONVERSATION RULES:**
+1. **ASK ONE QUESTION AT A TIME** - Focus only on current section
+2. **VALIDATE RESPONSES** - Check if answer makes sense for the question
+3. **BE PATIENT** - If unclear, ask same question again politely
+4. **USE TOOLS ONLY ONCE** - When you get a clear answer:
+   - First use RecordInfo tool to save the data
+   - Then use MarkSectionComplete tool to move forward
+   - DO NOT call tools multiple times for same data
+
+**CURRENT SECTION:** {section}
+**COLLECTED DATA SO FAR:**
+{json.dumps(collected_data, ensure_ascii=False, indent=2)}
+
+{section_prompt}"""
+
+        # Add validation context if there's a previous user response
+        if last_user_response:
+            # Check if current section data is already recorded
+            section_mapping = {
+                'patient_name': ('demographics', 'name'),
+                'patient_age': ('demographics', 'age'),
+                'patient_gender': ('demographics', 'gender'),
+                'patient_occupation': ('demographics', 'occupation'),
+                'patient_address': ('demographics', 'address'),
+                'patient_contact': ('demographics', 'contact'),
+                'complaint': ('presentation', 'chief_complaint'),
+                'hpc_pain': ('history', 'hpc'),
+                'systems': ('review', 'systems'),
+                'pmh': ('history', 'past_medical'),
+                'drugs': ('medications', 'current'),
+                'social': ('social', 'history')
+            }
+            
+            data_already_recorded = False
+            if section in section_mapping:
+                mapped_section, mapped_field = section_mapping[section]
+                if (mapped_section in collected_data and 
+                    mapped_field in collected_data[mapped_section] and
+                    collected_data[mapped_section][mapped_field]):  # Check not empty
+                    data_already_recorded = True
+            
+            base_prompt += f"""
+
+**VALIDATION CONTEXT:**
+Last user response: "{last_user_response}"
+Data already recorded for {section}: {data_already_recorded}
+
+**CRITICAL DECISION LOGIC:**
+1. If data is ALREADY RECORDED for {section}:
+   - ONLY use MarkSectionComplete to move forward
+   - DO NOT use RecordInfo again
+   - DO NOT ask the same question again
+2. If "{last_user_response}" is clear and relevant for {section} AND data not recorded:
+   - Use RecordInfo tool ONCE to save the data
+   - Then use MarkSectionComplete tool ONCE to move forward
+3. If UNCLEAR or IRRELEVANT and data not recorded:
+   - Ask the same question again politely
+   - DO NOT use any tools
+
+**REMEMBER: If data is already recorded, just mark complete and move on!**
+- Examples of UNCLEAR: "موسیقی", random words, gibberish, unrelated answers
+
+**Remember: One clear question, wait for clear answer, validate, then proceed.**"""
+        
+        return base_prompt
     
     @staticmethod
     def detect_language(text: str) -> str:
@@ -129,86 +270,21 @@ class UrduMedicalHistorySystem:
     """
     
     def __init__(self):
-        # Initialize LLM using Groq wrapper (gpt-oss-1220b)
-        # This wrapper expects GROQ_API_KEY to be present in the environment and the
-        # `groq` package to be installed. If not available, it raises a clear error when invoked.
-        class GroqLLM:
-            def __init__(self, model: str = "openai/gpt-oss-120b", temperature: float = 0.3, streaming: bool = True):
-                self.model = model
-                self.temperature = temperature
-                self.streaming = streaming
-                self.tools = []
-
-                api_key = os.getenv('GROQ_API_KEY')
-                if Groq is None or not api_key:
-                    # Defer raising until actually used, but keep a flag
-                    self._client = None
-                else:
-                    self._client = Groq(api_key=api_key)
-
-            def bind_tools(self, tools_list):
-                self.tools = tools_list
-                return self
-
-            def _build_prompt(self, messages):
-                # Concatenate System / Human / AI messages into a single prompt
-                prompt_parts = []
-                for m in messages:
-                    cls = m.__class__.__name__
-                    if cls == 'SystemMessage':
-                        prompt_parts.append(m.content)
-                    elif cls == 'HumanMessage':
-                        prompt_parts.append(f"User: {m.content}")
-                    elif cls == 'AIMessage':
-                        prompt_parts.append(f"Assistant: {m.content}")
-                    else:
-                        prompt_parts.append(m.content)
-                return '\n'.join(prompt_parts)
-
-            def invoke(self, messages):
-                prompt = self._build_prompt(messages)
-
-                if not self._client:
-                    # Graceful mock fallback for local/dev when GROQ is not configured.
-                    # Return a short Urdu demo reply so the app remains usable for UI testing.
-                    mock_reply = (
-                        "یہ ایک مقامی ڈیمو جواب ہے۔ براہِ کرم حقیقی ماڈل کے لئے GROQ_API_KEY سیٹ کریں۔\n"
-                        "آپ کے مسئلے کے بارے میں مزید بتائیں۔"
-                    )
-
-                    class _RespMock:
-                        def __init__(self, content):
-                            self.content = content
-                            self.tool_calls = []
-
-                    return _RespMock(mock_reply)
-
-                # Try common Groq client interfaces (best-effort compatibility)
-                # 1) Chat completions interface
-                if hasattr(self._client, 'chat') and hasattr(self._client.chat, 'completions'):
-                    resp = self._client.chat.completions.create(model=self.model, messages=[{"role": "user", "content": prompt}], temperature=self.temperature)
-                    content = getattr(resp, 'content', getattr(resp, 'text', str(resp)))
-                # 2) text.generate interface
-                elif hasattr(self._client, 'text') and hasattr(self._client.text, 'generate'):
-                    resp = self._client.text.generate(model=self.model, input=prompt, temperature=self.temperature)
-                    content = getattr(resp, 'text', str(resp))
-                # 3) generic generate
-                elif hasattr(self._client, 'generate'):
-                    resp = self._client.generate(model=self.model, input=prompt, temperature=self.temperature)
-                    content = getattr(resp, 'text', str(resp))
-                else:
-                    raise RuntimeError('Groq client does not expose a known text generation interface in this environment')
-
-                # Simple response object compatible with existing code
-                class _Resp:
-                    def __init__(self, content):
-                        self.content = content
-                        self.tool_calls = []
-
-                return _Resp(content)
-
+        # Initialize LLM using official langchain-groq ChatGroq
+        api_key = os.getenv('GROQ_API_KEY')
+        
+        if not api_key:
+            raise ValueError("GROQ_API_KEY environment variable is required")
+        
+        # Use official ChatGroq with Urdu-optimized settings
+        self.llm = ChatGroq(
+            model="openai/gpt-oss-120b",  # Good for multilingual/Urdu
+            temperature=0.3,
+            groq_api_key=api_key,
+            max_tokens=1024
+        )
+        
         # Create and bind tools
-        self.llm = GroqLLM(model="openai/gpt-oss-120b", temperature=0.3, streaming=True)
         tools = [RecordInfo, MarkSectionComplete]
         self.llm_with_tools = self.llm.bind_tools(tools)
         
@@ -217,7 +293,12 @@ class UrduMedicalHistorySystem:
         
         # Section order
         self.sections_order = [
-            'demographics',
+            'patient_name',
+            'patient_age',
+            'patient_gender',
+            'patient_occupation',
+            'patient_address',
+            'patient_contact',
             'complaint', 
             'hpc_pain',
             'systems',
@@ -235,27 +316,40 @@ class UrduMedicalHistorySystem:
     
     def agent_node(self, state: HistoryState) -> HistoryState:
         """
-        CORE NODE: Where LLM makes decisions
+        CORE NODE: Where LLM makes decisions with response validation
         This is where File 1 (structure) meets File 2 (language)
         """
         
-        # BUILD URDU PROMPT (File 2)
+        # Skip if section is already complete - let router handle transition
+        if state['section_complete']:
+            print(f"⏭️ Section {state['current_section']} already complete, skipping agent")
+            return state
+        
+        # Get last user response for validation
+        last_user_response = None
+        user_messages = [m for m in state['messages'] if m['role'] == 'user']
+        if user_messages:
+            last_user_response = user_messages[-1]['content']
+        
+        # BUILD URDU PROMPT with validation context
         system_prompt = self.prompt_builder.build_prompt(
             section=state['current_section'],
-            collected_data=state['collected_data']
+            collected_data=state['collected_data'],
+            last_user_response=last_user_response
         )
         
         # PREPARE MESSAGES
         messages = [SystemMessage(content=system_prompt)]
         
-        # Add conversation history
-        for msg in state['messages']:
+        # Add conversation history (limit to recent exchanges)
+        recent_messages = state['messages'][-6:]  # Last 6 messages to avoid token limit
+        for msg in recent_messages:
             if msg['role'] == 'user':
                 messages.append(HumanMessage(content=msg['content']))
             else:
                 messages.append(AIMessage(content=msg['content']))
         
-        # CALL LLM (with Urdu instructions)
+        # CALL LLM (with Urdu instructions and validation)
         response = self.llm_with_tools.invoke(messages)
         
         # UPDATE STATE
@@ -270,8 +364,7 @@ class UrduMedicalHistorySystem:
     
     def tool_node(self, state: HistoryState) -> HistoryState:
         """
-        Execute tools that LLM called
-        This structures the data from Urdu conversation
+        Execute tools with proper validation and data structuring
         """
         last_message = state['messages'][-1]
         tool_calls = last_message.get('tool_calls', [])
@@ -281,18 +374,64 @@ class UrduMedicalHistorySystem:
             tool_input = tool_call['args']
             
             if tool_name == 'RecordInfo':
-                # Store structured data
-                section = tool_input['section']
-                field = tool_input['field']
-                value = tool_input['value']
+                # Store structured data with section mapping
+                section = tool_input.get('section', 'general')
+                field = tool_input.get('field', 'unknown')
+                value = tool_input.get('value', '')
                 
+                # Map current section to appropriate data structure
+                section_mapping = {
+                    'patient_name': ('demographics', 'name'),
+                    'patient_age': ('demographics', 'age'),
+                    'patient_gender': ('demographics', 'gender'),
+                    'patient_occupation': ('demographics', 'occupation'),
+                    'patient_address': ('demographics', 'address'),
+                    'patient_contact': ('demographics', 'contact'),
+                    'complaint': ('presentation', 'chief_complaint'),
+                    'hpc_pain': ('history', 'hpc'),
+                    'systems': ('review', 'systems'),
+                    'pmh': ('history', 'past_medical'),
+                    'drugs': ('medications', 'current'),
+                    'social': ('social', 'history')
+                }
+                
+                if state['current_section'] in section_mapping:
+                    mapped_section, mapped_field = section_mapping[state['current_section']]
+                    section = mapped_section
+                    field = mapped_field
+                
+                # Store the data (prevent duplicates with better logic)
                 if section not in state['collected_data']:
                     state['collected_data'][section] = {}
                 
-                state['collected_data'][section][field] = value
+                # Only record if not already recorded, empty, or significantly different
+                current_value = state['collected_data'][section].get(field, '')
+                if not current_value or current_value != value:
+                    state['collected_data'][section][field] = value
+                    print(f"✅ Recorded: {section}.{field} = '{value}'")
+                    
+                    # Add system message to prevent re-recording
+                    state['messages'].append({
+                        'role': 'system',
+                        'content': f"Data recorded for {state['current_section']}. Ready to move to next section.",
+                        'tool_calls': []
+                    })
+                else:
+                    print(f"⚠️ Skipped duplicate: {section}.{field} already contains '{current_value}'")
+                    # Don't add system message for duplicates to avoid confusion
             
             elif tool_name == 'MarkSectionComplete':
-                state['section_complete'] = True
+                if not state['section_complete']:  # Only if not already complete
+                    state['section_complete'] = True
+                    print(f"✓ Section complete: {state['current_section']}")
+                    # Add a message to prevent further tool calls
+                    state['messages'].append({
+                        'role': 'system',
+                        'content': f"Section {state['current_section']} marked complete. Moving to next section.",
+                        'tool_calls': []
+                    })
+                else:
+                    print(f"⚠️ Section {state['current_section']} already marked complete - ignoring duplicate call")
         
         return state
     
@@ -302,31 +441,35 @@ class UrduMedicalHistorySystem:
         current_idx = self.sections_order.index(state['current_section'])
         
         if current_idx < len(self.sections_order) - 1:
+            old_section = state['current_section']
             state['current_section'] = self.sections_order[current_idx + 1]
-            state['section_complete'] = False
+            state['section_complete'] = False  # Reset for next section
+            print(f"📋 Moved from '{old_section}' to '{state['current_section']}'")
         else:
             state['all_sections_done'] = True
+            print("✅ All sections completed!")
         
         return state
     
     
     def router(self, state: HistoryState) -> str:
         """Decide what to do next"""
-        last_msg = state['messages'][-1]
+        last_msg = state['messages'][-1] if state['messages'] else None
         
-        # If LLM called tools, execute them
-        if last_msg.get('tool_calls'):
-            return "tools"
-        
-        # If section complete, move to next
-        if state['section_complete']:
-            return "next_section"
-        
-        # If all done, end
+        # Check if all sections are done first
         if state['all_sections_done']:
             return "end"
         
-        # Otherwise, wait for user response
+        # If section is complete, move to next section
+        if state['section_complete']:
+            print(f"🔄 Moving from {state['current_section']} to next section")
+            return "next_section"
+        
+        # If LLM called tools, execute them
+        if last_msg and last_msg.get('tool_calls'):
+            return "tools"
+        
+        # Otherwise, continue conversation (wait for user or ask question)
         return "continue"
     
     
@@ -359,6 +502,7 @@ class UrduMedicalHistorySystem:
         workflow.add_edge("tools", "agent")
         workflow.add_edge("next_section", "agent")
         
+        # Compile without config parameter for compatibility
         return workflow.compile()
     
     
@@ -368,7 +512,7 @@ class UrduMedicalHistorySystem:
         """Initialize a new interview"""
         state = {
             "messages": [],
-            "current_section": "demographics",
+            "current_section": "patient_name",  # Start with patient name
             "collected_data": {},
             "section_complete": False,
             "all_sections_done": False,
@@ -377,7 +521,6 @@ class UrduMedicalHistorySystem:
         
         # Get first question
         result = self.graph.invoke(state)
-        
         return {
             "ai_message": result['messages'][-1]['content'],
             "state": result
@@ -403,7 +546,6 @@ class UrduMedicalHistorySystem:
         
         # Run through graph
         result = self.graph.invoke(state)
-        
         return {
             "ai_message": result['messages'][-1]['content'],
             "state": result,

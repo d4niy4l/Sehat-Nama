@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Urdu Medical History Voice Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        #controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 20px;
+            font-size: 18px;
+            color: #333;
+        }
+        #history {
+            margin-top: 20px;
+            max-width: 600px;
+            text-align: left;
+            display: none; /* Hidden for voice-only */
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <button id="startBtn">Start Recording</button>
+        <button id="stopBtn" disabled>Stop Recording</button>
+        <div id="status">Press "Start Recording" to begin</div>
+    </div>
+    <div id="history"></div>
+
+    <script>
+        const apiBase = 'http://localhost:8000';
+        let sessionId = null;
+        let recorder = null;
+        let audio = null;
+
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const statusDiv = document.getElementById('status');
+        const historyDiv = document.getElementById('history');
+
+        async function startInterview() {
+            statusDiv.textContent = 'Starting interview...';
+            try {
+                const res = await fetch(`${apiBase}/api/start-interview`, { method: 'POST' });
+                const data = await res.json();
+                if (data.error) throw new Error(data.details);
+                sessionId = data.session_id;
+                await ttsAndPlay(data.message);
+            } catch (e) {
+                statusDiv.textContent = `Error starting interview: ${e.message}`;
+                startBtn.disabled = false;
+            }
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                recorder = new MediaRecorder(stream);
+                const chunks = [];
+                recorder.ondataavailable = e => chunks.push(e.data);
+                recorder.onstop = async () => {
+                    const blob = new Blob(chunks, { type: 'audio/webm' });
+                    await sendAudio(blob);
+                };
+                recorder.start();
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                statusDiv.textContent = 'Recording... Press Stop to send';
+            } catch (e) {
+                statusDiv.textContent = `Error accessing microphone: ${e.message}`;
+                startBtn.disabled = false;
+            }
+        }
+
+        function stopRecording() {
+            if (recorder && recorder.state === 'recording') {
+                recorder.stop();
+                stopBtn.disabled = true;
+                statusDiv.textContent = 'Processing...';
+            }
+        }
+
+        async function sendAudio(blob) {
+            try {
+                const formData = new FormData();
+                formData.append('file', blob, 'recording.webm');
+                formData.append('model', 'whisper-large-v3');
+
+                const transRes = await fetch(`${apiBase}/transcribe`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const trans = await transRes.json();
+                if (trans.error) throw new Error(trans.error);
+
+                const sendRes = await fetch(`${apiBase}/api/send-message`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId, message: trans.text })
+                });
+                const resp = await sendRes.json();
+                if (resp.error) throw new Error(resp.details);
+
+                if (resp.is_complete) {
+                    statusDiv.textContent = 'Interview complete!';
+                    startBtn.disabled = true;
+                    await saveHistory();
+                } else {
+                    console.log(resp.message)
+                    await ttsAndPlay(resp.message);
+                    startBtn.disabled = false;
+                    statusDiv.textContent = 'Playing AI response... Record next when done';
+                }
+            } catch (e) {
+                statusDiv.textContent = `Error: ${e.message}`;
+                startBtn.disabled = false;
+            }
+        }
+
+        async function ttsAndPlay(text) {
+            const formData = new FormData();
+            formData.append('text', text);
+            formData.append('voice_id', 'v_meklc281');
+            formData.append('output_format', 'MP3_22050_32');
+            formData.append('save_file', 'false');
+
+            const ttsRes = await fetch(`${apiBase}/text-to-speech`, {
+                method: 'POST',
+                body: formData
+            });
+            if (!ttsRes.ok) throw new Error('TTS failed');
+            
+            const audioBlob = await ttsRes.blob();
+            const url = URL.createObjectURL(audioBlob);
+            audio = new Audio(url);
+            audio.play();
+            audio.onended = () => {
+                statusDiv.textContent = 'Ready to record next response';
+                startBtn.disabled = false;
+            };
+        }
+
+        async function saveHistory() {
+            try {
+                const res = await fetch(`${apiBase}/api/get-history?session_id=${sessionId}&view=patient`);
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                // History saved on server (llm_sessions); optionally display for debug
+                // historyDiv.textContent = JSON.stringify(data.history, null, 2);
+                console.log('History saved:', data.history);
+            } catch (e) {
+                console.error('Failed to save history:', e);
+            }
+        }
+
+        startBtn.addEventListener('click', startRecording);
+        stopBtn.addEventListener('click', stopRecording);
+
+        // Start interview on page load
+        startInterview();
+    </script>
+</body>
+</html>

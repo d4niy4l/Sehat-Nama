@@ -3,6 +3,7 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from groq import Groq
 from typing import Literal
 import os
@@ -287,9 +288,20 @@ async def api_send_message(req: SendMessageRequest):
         state = llm_sessions[req.session_id]
         result = llm_system.process_user_message(state, req.message)
         llm_sessions[req.session_id] = result['state']
-
+        print('Send Message')      
+        print(result)
+        ai_message = result['ai_message']
+        if hasattr(ai_message, "choices") and ai_message.choices:
+            print('im here 1')
+            ai_message = ai_message.choices[0].message.content
+        elif hasattr(ai_message, "content"):
+            print('im here 2')
+            ai_message = ai_message.content
+        else:
+            print('im here 3')
+            ai_message = str(ai_message)
         return {
-            'message': result['ai_message'],
+            'message': ai_message,
             'collected_data': result['collected_data'],
             'is_complete': result['is_complete']
         }
@@ -312,6 +324,12 @@ async def api_get_history(session_id: str, view: str = 'patient'):
         return { 'error': 'failed to build history', 'details': str(e) }
 
     return { 'session_id': session_id, 'view': view, 'history': history }
+
+app.mount("/static", StaticFiles(directory="."), name="static")
+
+@app.get("/index")
+async def serve_index():
+    return FileResponse("index.html")
 
 
 if __name__ == "__main__":
