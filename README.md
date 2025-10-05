@@ -190,10 +190,10 @@ Endpoints provided by the Python backend (default port 8000):
 - POST /api/start-interview  -> returns { session_id, message }
 - POST /api/send-message     -> body { session_id, message } -> responds with AI reply and collected_data
 
-The Next.js app includes proxy routes under `app/api/ai-proxy/*` which forward requests to the Python server. By default they point at `http://localhost:8000`.
+The Next.js app includes proxy routes under `app/api/ai-proxy/*` which forward requests to the Python server. By default they point at `https://sehatnamafastapi.onrender.com`.
 
 Environment variables useful for integration:
-- PYTHON_API_BASE: base URL of the Python backend (optional, default http://localhost:8000)
+- NEXT_PUBLIC_PYTHON_API_BASE: base URL of the Python backend (optional, default https://sehatnamafastapi.onrender.com)
 - NEXT_PUBLIC_API_BASE: base prefix for Next.js API (usually empty)
 
 How to run the Python backend locally:
