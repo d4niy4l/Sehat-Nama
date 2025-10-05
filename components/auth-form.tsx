@@ -410,7 +410,7 @@ export default function AuthForm() {
                 </div>
               </div>
 
-              <Button
+              {/* <Button
                 onClick={handleGoogleAuth}
                 disabled={googleLoading}
                 className="btn-auth-secondary animate-slide-up mt-4"
@@ -447,7 +447,7 @@ export default function AuthForm() {
                     <span className="transition-all duration-300">Continue with Google</span>
                   </div>
                 )}
-              </Button>
+              </Button> */}
             </div>
 
             <div className="mt-6 text-center animate-slide-up" style={{ animationDelay: isLogin ? '0.7s' : '1.2s' }}>
