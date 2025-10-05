@@ -36,7 +36,7 @@ export const authUtils = {
     // If user is created successfully, create user_info record
     if (data.user) {
       try {
-        await this.createUserProfile(data.user.id, { email, firstName, lastName, cnic, password })
+        await this.createUserProfile(data.user.id, { email, firstName, lastName, cnic, password,phone, dateOfBirth })
       } catch (profileError) {
         console.warn('Failed to create user profile:', profileError)
         // Don't throw error here as auth user is already created

@@ -485,7 +485,7 @@ export default function AIConversationPage() {
         )}
 
         {/* User Response Display */}
-        {/* {userResponse && (
+         {userResponse && (
           <div className="bg-gradient-to-r from-teal-50 to-emerald-50 rounded-2xl p-6 shadow-lg border border-teal-200 max-w-4xl mx-auto">
             <div className="flex items-center justify-center space-x-3 mb-3">
               <Mic className="h-5 w-5 text-teal-600" />
@@ -495,7 +495,7 @@ export default function AIConversationPage() {
               {userResponse}
             </p>
           </div>
-        )} */}
+        )} 
 
         {/* Status */}
         <div className="text-center max-w-2xl">
